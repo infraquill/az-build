@@ -1,0 +1,237 @@
+# Azure Pipeline to deploy Management Group Diagnostic Settings using Deployment Stacks
+# This pipeline deploys the mg-diag-settings Bicep template as a Deployment Stack at Management Group scope
+# Configures diagnostic settings for the Management Group hierarchy to send logs to a Log Analytics Workspace
+#
+# =============================================================================
+# RBAC REQUIREMENTS
+# =============================================================================
+# The service principal used by the Azure service connection requires:
+#
+#   1. Management Group Contributor - On the target management group (e.g. alz)
+#   2. Log Analytics Reader/Contributor - On the workspace (if validation requires it)
+#
+# Assignment commands:
+#
+#   SP_OBJECT_ID="<service-principal-object-id>"
+#   MG_ID="alz"
+#
+#   az role assignment create --assignee "$SP_OBJECT_ID" \
+#     --role "Contributor" \
+#     --scope "/providers/Microsoft.Management/managementGroups/$MG_ID"
+#
+# =============================================================================
+
+trigger:
+  batch: true
+  branches:
+    include:
+      - main
+  paths:
+    include:
+      - code/bicep/mg-diag-settings/**
+      - code/pipelines/mg-diag-settings/mg-diag-settings-pipeline.yaml
+
+pr:
+  branches:
+    include:
+      - main
+  paths:
+    include:
+      - code/bicep/mg-diag-settings/**
+      - code/pipelines/mg-diag-settings/mg-diag-settings-pipeline.yaml
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+variables:
+  - group: common-variables
+  - name: bicepPath
+    value: 'code/bicep/mg-diag-settings'
+  - name: scriptsPath
+    value: 'code/pipelines/mg-diag-settings'
+  - name: templateFile
+    value: "$(bicepPath)/mg-diag-settings.bicep"
+  - name: parametersFile
+    value: "$(bicepPath)/mg-diag-settings.bicepparam"
+  - name: managementGroupId
+    value: 'alz' # Default MG ID
+  - name: stackName
+    value: "stack-${{ parameters.workloadAlias }}-${{ parameters.environment }}-${{ parameters.locationCode }}-${{ parameters.instanceNumber }}"
+
+parameters:
+  - name: workloadAlias
+    displayName: "Workload Alias"
+    type: string
+    default: "mg-diag"
+  - name: environment
+    displayName: "Environment"
+    type: string
+    default: "live"
+    values:
+      - nonprod
+      - dev
+      - test
+      - uat
+      - staging
+      - prod
+      - live
+  - name: locationCode
+    displayName: "Location Code (e.g., cac for canada central)"
+    type: string
+    default: "cac"
+  - name: instanceNumber
+    displayName: "Instance Number (e.g., 001 for the first instance)"
+    type: string
+    default: "001"
+  - name: location
+    displayName: "Azure Region"
+    type: string
+    default: "uksouth"
+  - name: deploymentStage
+    displayName: "Pipeline Stage to Run"
+    type: string
+    default: "Preview"
+    values:
+      - Validation
+      - Preview
+      - Deploy
+      - Remove
+  - name: denySettingsMode
+    displayName: "Deny Settings Mode"
+    type: string
+    default: "denyWriteAndDelete"
+    values:
+      - none
+      - denyDelete
+      - denyWriteAndDelete
+  - name: actionOnUnmanage
+    displayName: "Action on Unmanaged Resources"
+    type: string
+    default: "detachAll"
+    values:
+      - deleteResources
+      - deleteAll
+      - detachAll
+
+stages:
+  - stage: Validate
+    displayName: "Validate Deployment Stack"
+    jobs:
+      - template: ../templates/jobs/validate-environment-job.yaml
+        parameters:
+          environment: ${{ parameters.environment }}
+      - job: ValidateStack
+        displayName: "Validate Stack"
+        dependsOn: ValidateEnvironment
+        steps:
+          - task: AzureCLI@2
+            displayName: "Validate Stack"
+            inputs:
+              azureSubscription: "$(azureServiceConnection)"
+              scriptType: "bash"
+              scriptLocation: "inlineScript"
+              inlineScript: |
+                bash $(scriptsPath)/mgd-validate-stack.sh \
+                  "$(managementGroupId)" \
+                  "$(templateFile)" \
+                  "$(parametersFile)" \
+                  "${{ parameters.location }}" \
+                  "$(stackName)" \
+                  "${{ parameters.denySettingsMode }}" \
+                  "${{ parameters.actionOnUnmanage }}" \
+                  "alz" \
+                  "" \
+                  ""
+
+  - stage: Preview
+    displayName: "Preview Stack State"
+    dependsOn: Validate
+    condition: |
+      and(
+        eq(dependencies.Validate.result, 'Succeeded'),
+        in('${{ parameters.deploymentStage }}', 'Preview', 'Deploy')
+      )
+    jobs:
+      - job: PreviewStack
+        displayName: "Preview Stack"
+        steps:
+          - task: AzureCLI@2
+            displayName: "Preview Stack"
+            inputs:
+              azureSubscription: "$(azureServiceConnection)"
+              scriptType: "bash"
+              scriptLocation: "inlineScript"
+              inlineScript: |
+                bash $(scriptsPath)/mgd-preview-stack.sh \
+                  "$(managementGroupId)" \
+                  "$(stackName)"
+
+  - stage: Deploy
+    displayName: "Deploy Deployment Stack"
+    dependsOn:
+      - Validate
+      - Preview
+    condition: |
+      and(
+        eq(dependencies.Validate.result, 'Succeeded'),
+        in(dependencies.Preview.result, 'Succeeded', 'Skipped'),
+        eq('${{ parameters.deploymentStage }}', 'Deploy')
+      )
+    jobs:
+      - deployment: DeployMgDiagSettingsStack
+        displayName: "Deploy Stack"
+        environment: "live"
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - checkout: self
+
+                - task: AzureCLI@2
+                  displayName: "Deploy Stack"
+                  inputs:
+                    azureSubscription: "$(azureServiceConnection)"
+                    scriptType: "bash"
+                    scriptLocation: "inlineScript"
+                    inlineScript: |
+                      bash $(scriptsPath)/mgd-deploy-stack.sh \
+                        "$(managementGroupId)" \
+                        "$(templateFile)" \
+                        "$(parametersFile)" \
+                        "${{ parameters.location }}" \
+                        "$(stackName)" \
+                        "${{ parameters.denySettingsMode }}" \
+                        "${{ parameters.actionOnUnmanage }}" \
+                        "alz" \
+                        "" \
+                        ""
+
+  - stage: Remove
+    displayName: "Remove Deployment Stack"
+    dependsOn: Validate
+    condition: |
+      and(
+        eq(dependencies.Validate.result, 'Succeeded'),
+        eq('${{ parameters.deploymentStage }}', 'Remove')
+      )
+    jobs:
+      - deployment: RemoveMgDiagSettingsStack
+        displayName: "Remove Stack"
+        environment: "live"
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - checkout: self
+
+                - task: AzureCLI@2
+                  displayName: "Remove Stack"
+                  inputs:
+                    azureSubscription: "$(azureServiceConnection)"
+                    scriptType: "bash"
+                    scriptLocation: "inlineScript"
+                    inlineScript: |
+                      bash $(scriptsPath)/mgd-delete-stack.sh \
+                        "$(managementGroupId)" \
+                        "$(stackName)" \
+                        "${{ parameters.actionOnUnmanage }}"
