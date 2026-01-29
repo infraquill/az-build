@@ -1,0 +1,315 @@
+# Azure Pipeline to deploy CloudOps Managed DevOps Pools using Deployment Stacks
+# This pipeline deploys the CloudOps Bicep template as a Deployment Stack at subscription scope
+# Deploys Managed DevOps Pool with native scale-to-zero support
+# Prerequisites:
+# - Stage 1: CloudOps subscription created via sub-vending pipeline
+# - Stage 2: CloudOps spoke networking deployed via spoke-networking pipeline
+# - Stage 3: DevCenter deployed via cloudops-devcenter-pipeline
+
+trigger: none
+pr: none
+
+pool:
+  vmImage: "ubuntu-latest"
+
+variables:
+  - group: common-variables
+  - name: bicepPath
+    value: "code/bicep/cloudops"
+  - name: templateFile
+    value: "$(bicepPath)/cloudops.bicep"
+  - name: parametersFile
+    value: "$(bicepPath)/cloudops.bicepparam"
+  - name: scriptsPath
+    value: "code/pipelines/cloudops"
+  - name: stackName
+    value: "stack-${{ parameters.workloadAlias }}-${{ parameters.environment }}-${{ parameters.locationCode }}-${{ parameters.instanceNumber }}"
+
+parameters:
+  # Target CloudOps subscription (from Stage 1)
+  - name: subscriptionId
+    displayName: "CloudOps Subscription ID (from sub-vending)"
+    type: string
+    default: ""
+  # Core naming parameters
+  - name: workloadAlias
+    displayName: "Workload Alias"
+    type: string
+    default: "cloudops"
+  - name: environment
+    displayName: "Environment"
+    type: string
+    default: "live"
+    values:
+      - nonprod
+      - dev
+      - test
+      - uat
+      - staging
+      - prod
+      - live
+  - name: locationCode
+    displayName: "Location Code (e.g., cac for canada central)"
+    type: string
+    default: "cac"
+  - name: instanceNumber
+    displayName: "Instance Number (e.g., 001 for the first instance)"
+    type: string
+    default: "001"
+  - name: location
+    displayName: "Azure Region"
+    type: string
+    default: "canadacentral"
+  # Ownership
+  - name: owner
+    displayName: "Owner (e.g., platform-team@example.com)"
+    type: string
+    default: ""
+  - name: managedBy
+    displayName: "Managed By"
+    type: string
+    default: "Bicep"
+  # DevCenter references (from Stage 3)
+  - name: devCenterResourceId
+    displayName: "DevCenter Resource ID (from cloudops-devcenter-pipeline)"
+    type: string
+    default: ""
+  # Spoke networking references (from Stage 2)
+  - name: poolSubnetResourceId
+    displayName: "Pool Subnet Resource ID (from spoke-networking)"
+    type: string
+    default: ""
+  # Managed DevOps Pool Configuration
+  - name: poolMaximumConcurrency
+    displayName: "Maximum Pool Concurrency (agent count)"
+    type: number
+    default: 4
+  - name: poolAgentSkuName
+    displayName: "Pool Agent VM SKU"
+    type: string
+    default: "Standard_D4s_v5"
+  - name: poolImageName
+    displayName: "Pool Image Name"
+    type: string
+    default: "ubuntu-22.04/latest"
+    values:
+      - ubuntu-22.04/latest
+      - ubuntu-24.04/latest
+      - windows-2022/latest
+      - windows-2019/latest
+  - name: enableScaleToZero
+    displayName: "Enable Scale-to-Zero (cost optimization)"
+    type: boolean
+    default: true
+  # Azure DevOps Configuration
+  - name: azureDevOpsOrganizationUrl
+    displayName: "Azure DevOps Organization URL (e.g., https://dev.azure.com/myorg)"
+    type: string
+    default: ""
+  - name: azureDevOpsProjectNames
+    displayName: "Azure DevOps Project Names (comma-separated, leave empty for org-wide)"
+    type: string
+    default: ""
+  # Deployment Stack settings
+  - name: denySettingsMode
+    displayName: "Deny Settings Mode"
+    type: string
+    default: "denyWriteAndDelete"
+    values:
+      - none
+      - denyDelete
+      - denyWriteAndDelete
+  - name: actionOnUnmanage
+    displayName: "Action on Unmanaged Resources"
+    type: string
+    default: "detachAll"
+    values:
+      - deleteResources
+      - deleteAll
+      - detachAll
+  - name: deploymentStage
+    displayName: "Pipeline Stage to Run"
+    type: string
+    default: "WhatIf"
+    values:
+      - Validation
+      - WhatIf
+      - Deploy
+      - Remove
+
+stages:
+  - stage: Validate
+    displayName: "Validate Deployment Stack"
+    # Runs for: Validation, WhatIf, Deploy (all options)
+    jobs:
+      - template: ../templates/jobs/validate-environment-job.yaml
+        parameters:
+          environment: ${{ parameters.environment }}
+      - job: ValidateStack
+        displayName: "Validate Stack"
+        dependsOn: ValidateEnvironment
+        steps:
+          - checkout: self
+
+          - task: AzureCLI@2
+            displayName: "Validate CloudOps Deployment Stack"
+            inputs:
+              azureSubscription: "$(azureServiceConnection)"
+              scriptType: "bash"
+              scriptLocation: "inlineScript"
+              inlineScript: |
+                bash $(scriptsPath)/co-validate-stack.sh \
+                  "${{ parameters.subscriptionId }}" \
+                  "$(templateFile)" \
+                  "$(parametersFile)" \
+                  "$(deploymentLocation)" \
+                  "$(stackName)" \
+                  "${{ parameters.denySettingsMode }}" \
+                  "${{ parameters.actionOnUnmanage }}" \
+                  "${{ parameters.workloadAlias }}" \
+                  "${{ parameters.environment }}" \
+                  "${{ parameters.locationCode }}" \
+                  "${{ parameters.instanceNumber }}" \
+                  "${{ parameters.location }}" \
+                  "${{ parameters.owner }}" \
+                  "${{ parameters.managedBy }}" \
+                  "${{ parameters.devCenterResourceId }}" \
+                  "${{ parameters.poolSubnetResourceId }}" \
+                  "${{ parameters.poolMaximumConcurrency }}" \
+                  "${{ parameters.poolAgentSkuName }}" \
+                  "${{ parameters.poolImageName }}" \
+                  "${{ parameters.enableScaleToZero }}" \
+                  "${{ parameters.azureDevOpsOrganizationUrl }}" \
+                  "${{ parameters.azureDevOpsProjectNames }}"
+
+  - stage: WhatIf
+    displayName: "What-If Analysis"
+    dependsOn:
+      - Validate
+    # Runs for: WhatIf, Deploy
+    condition: |
+      and(
+        eq(dependencies.Validate.result, 'Succeeded'),
+        in('${{ parameters.deploymentStage }}', 'WhatIf', 'Deploy')
+      )
+    jobs:
+      - job: WhatIfAnalysis
+        displayName: "What-If"
+        steps:
+          - checkout: self
+
+          - task: AzureCLI@2
+            displayName: "What-If CloudOps Deployment Stack"
+            inputs:
+              azureSubscription: "$(azureServiceConnection)"
+              scriptType: "bash"
+              scriptLocation: "inlineScript"
+              inlineScript: |
+                bash $(scriptsPath)/co-whatif-stack.sh \
+                  "${{ parameters.subscriptionId }}" \
+                  "$(templateFile)" \
+                  "$(parametersFile)" \
+                  "$(deploymentLocation)" \
+                  "$(stackName)" \
+                  "${{ parameters.denySettingsMode }}" \
+                  "${{ parameters.actionOnUnmanage }}" \
+                  "${{ parameters.workloadAlias }}" \
+                  "${{ parameters.environment }}" \
+                  "${{ parameters.locationCode }}" \
+                  "${{ parameters.instanceNumber }}" \
+                  "${{ parameters.location }}" \
+                  "${{ parameters.owner }}" \
+                  "${{ parameters.managedBy }}" \
+                  "${{ parameters.devCenterResourceId }}" \
+                  "${{ parameters.poolSubnetResourceId }}" \
+                  "${{ parameters.poolMaximumConcurrency }}" \
+                  "${{ parameters.poolAgentSkuName }}" \
+                  "${{ parameters.poolImageName }}" \
+                  "${{ parameters.enableScaleToZero }}" \
+                  "${{ parameters.azureDevOpsOrganizationUrl }}" \
+                  "${{ parameters.azureDevOpsProjectNames }}"
+
+  - stage: Deploy
+    displayName: "Deploy CloudOps Deployment Stack"
+    dependsOn:
+      - Validate
+      - WhatIf
+    # Runs for: Deploy only
+    condition: |
+      and(
+        eq(dependencies.Validate.result, 'Succeeded'),
+        in(dependencies.WhatIf.result, 'Succeeded', 'Skipped'),
+        eq('${{ parameters.deploymentStage }}', 'Deploy')
+      )
+    jobs:
+      - deployment: DeployCloudOpsStack
+        displayName: "Deploy CloudOps Stack"
+        environment: "${{ parameters.environment }}"
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - checkout: self
+
+                - task: AzureCLI@2
+                  displayName: "Deploy CloudOps Deployment Stack"
+                  inputs:
+                    azureSubscription: "$(azureServiceConnection)"
+                    scriptType: "bash"
+                    scriptLocation: "inlineScript"
+                    inlineScript: |
+                      bash $(scriptsPath)/co-deploy-stack.sh \
+                        "${{ parameters.subscriptionId }}" \
+                        "$(templateFile)" \
+                        "$(parametersFile)" \
+                        "$(deploymentLocation)" \
+                        "$(stackName)" \
+                        "${{ parameters.denySettingsMode }}" \
+                        "${{ parameters.actionOnUnmanage }}" \
+                        "${{ parameters.workloadAlias }}" \
+                        "${{ parameters.environment }}" \
+                        "${{ parameters.locationCode }}" \
+                        "${{ parameters.instanceNumber }}" \
+                        "${{ parameters.location }}" \
+                        "${{ parameters.owner }}" \
+                        "${{ parameters.managedBy }}" \
+                        "${{ parameters.devCenterResourceId }}" \
+                        "${{ parameters.poolSubnetResourceId }}" \
+                        "${{ parameters.poolMaximumConcurrency }}" \
+                        "${{ parameters.poolAgentSkuName }}" \
+                        "${{ parameters.poolImageName }}" \
+                        "${{ parameters.enableScaleToZero }}" \
+                        "${{ parameters.azureDevOpsOrganizationUrl }}" \
+                        "${{ parameters.azureDevOpsProjectNames }}"
+
+  - stage: Remove
+    displayName: "Remove CloudOps Deployment Stack"
+    dependsOn:
+      - Validate
+    # Runs for: Remove only
+    condition: |
+      and(
+        eq(dependencies.Validate.result, 'Succeeded'),
+        eq('${{ parameters.deploymentStage }}', 'Remove')
+      )
+    jobs:
+      - deployment: RemoveCloudOpsStack
+        displayName: "Remove CloudOps Stack"
+        environment: "${{ parameters.environment }}"
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - checkout: self
+
+                - task: AzureCLI@2
+                  displayName: "Delete CloudOps Deployment Stack"
+                  inputs:
+                    azureSubscription: "$(azureServiceConnection)"
+                    scriptType: "bash"
+                    scriptLocation: "inlineScript"
+                    inlineScript: |
+                      bash $(scriptsPath)/co-delete-stack.sh \
+                        "${{ parameters.subscriptionId }}" \
+                        "$(stackName)" \
+                        "${{ parameters.actionOnUnmanage }}"

@@ -1,0 +1,266 @@
+# Azure Pipeline to deploy DevCenter Infrastructure using Deployment Stacks
+# This pipeline deploys the DevCenter Bicep template as a Deployment Stack at subscription scope
+# DevCenter is a prerequisite for Managed DevOps Pools
+# Prerequisites:
+# - Stage 1: CloudOps subscription created via sub-vending pipeline
+# - Stage 2: CloudOps spoke networking deployed via spoke-networking pipeline (provides subnet for Network Connection)
+# Note: DevCenter is typically deployed once per organization and shared across multiple pools
+
+trigger: none
+pr: none
+
+pool:
+  vmImage: "ubuntu-latest"
+
+variables:
+  - group: common-variables
+  - name: bicepPath
+    value: "code/bicep/cloudops"
+  - name: templateFile
+    value: "$(bicepPath)/devcenter.bicep"
+  - name: parametersFile
+    value: "$(bicepPath)/devcenter.bicepparam"
+  - name: scriptsPath
+    value: "code/pipelines/cloudops-devcenter"
+  - name: stackName
+    value: "stack-${{ parameters.workloadAlias }}-${{ parameters.environment }}-${{ parameters.locationCode }}-${{ parameters.instanceNumber }}"
+
+parameters:
+  # Target CloudOps subscription (from Stage 1)
+  - name: subscriptionId
+    displayName: "CloudOps Subscription ID (from sub-vending)"
+    type: string
+    default: ""
+  # Core naming parameters
+  - name: workloadAlias
+    displayName: "Workload Alias"
+    type: string
+    default: "devcenter"
+  - name: environment
+    displayName: "Environment"
+    type: string
+    default: "live"
+    values:
+      - nonprod
+      - dev
+      - test
+      - uat
+      - staging
+      - prod
+      - live
+  - name: locationCode
+    displayName: "Location Code (e.g., cac for canada central)"
+    type: string
+    default: "cac"
+  - name: instanceNumber
+    displayName: "Instance Number (e.g., 001 for the first instance)"
+    type: string
+    default: "001"
+  - name: location
+    displayName: "Azure Region"
+    type: string
+    default: "canadacentral"
+  # Ownership
+  - name: owner
+    displayName: "Owner (e.g., platform-team@example.com)"
+    type: string
+    default: ""
+  - name: managedBy
+    displayName: "Managed By"
+    type: string
+    default: "Bicep"
+  # Spoke networking references (from Stage 2)
+  - name: subnetResourceId
+    displayName: "Subnet Resource ID for Network Connection (from spoke-networking)"
+    type: string
+    default: ""
+  # Monitoring
+  - name: logAnalyticsWorkspaceResourceId
+    displayName: "Log Analytics Workspace Resource ID (from monitoring infrastructure)"
+    type: string
+    default: ""
+  # Deployment Stack settings
+  - name: denySettingsMode
+    displayName: "Deny Settings Mode"
+    type: string
+    default: "denyWriteAndDelete"
+    values:
+      - none
+      - denyDelete
+      - denyWriteAndDelete
+  - name: actionOnUnmanage
+    displayName: "Action on Unmanaged Resources"
+    type: string
+    default: "detachAll"
+    values:
+      - deleteResources
+      - deleteAll
+      - detachAll
+  - name: deploymentStage
+    displayName: "Pipeline Stage to Run"
+    type: string
+    default: "WhatIf"
+    values:
+      - Validation
+      - WhatIf
+      - Deploy
+      - Remove
+
+stages:
+  - stage: Validate
+    displayName: "Validate DevCenter Deployment Stack"
+    # Runs for: Validation, WhatIf, Deploy (all options)
+    jobs:
+      - template: ../templates/jobs/validate-environment-job.yaml
+        parameters:
+          environment: ${{ parameters.environment }}
+      - job: ValidateStack
+        displayName: "Validate Stack"
+        dependsOn: ValidateEnvironment
+        steps:
+          - checkout: self
+
+          - task: AzureCLI@2
+            displayName: "Validate DevCenter Deployment Stack"
+            inputs:
+              azureSubscription: "$(azureServiceConnection)"
+              scriptType: "bash"
+              scriptLocation: "inlineScript"
+              inlineScript: |
+                bash $(scriptsPath)/dc-validate-stack.sh \
+                  "${{ parameters.subscriptionId }}" \
+                  "$(templateFile)" \
+                  "$(parametersFile)" \
+                  "$(deploymentLocation)" \
+                  "$(stackName)" \
+                  "${{ parameters.denySettingsMode }}" \
+                  "${{ parameters.actionOnUnmanage }}" \
+                  "${{ parameters.workloadAlias }}" \
+                  "${{ parameters.environment }}" \
+                  "${{ parameters.locationCode }}" \
+                  "${{ parameters.instanceNumber }}" \
+                  "${{ parameters.location }}" \
+                  "${{ parameters.owner }}" \
+                  "${{ parameters.managedBy }}" \
+                  "${{ parameters.subnetResourceId }}" \
+                  "${{ parameters.logAnalyticsWorkspaceResourceId }}"
+
+  - stage: WhatIf
+    displayName: "What-If Analysis"
+    dependsOn:
+      - Validate
+    # Runs for: WhatIf, Deploy
+    condition: |
+      and(
+        eq(dependencies.Validate.result, 'Succeeded'),
+        in('${{ parameters.deploymentStage }}', 'WhatIf', 'Deploy')
+      )
+    jobs:
+      - job: WhatIfAnalysis
+        displayName: "What-If"
+        steps:
+          - checkout: self
+
+          - task: AzureCLI@2
+            displayName: "What-If DevCenter Deployment Stack"
+            inputs:
+              azureSubscription: "$(azureServiceConnection)"
+              scriptType: "bash"
+              scriptLocation: "inlineScript"
+              inlineScript: |
+                bash $(scriptsPath)/dc-whatif-stack.sh \
+                  "${{ parameters.subscriptionId }}" \
+                  "$(templateFile)" \
+                  "$(parametersFile)" \
+                  "$(deploymentLocation)" \
+                  "$(stackName)" \
+                  "${{ parameters.denySettingsMode }}" \
+                  "${{ parameters.actionOnUnmanage }}" \
+                  "${{ parameters.workloadAlias }}" \
+                  "${{ parameters.environment }}" \
+                  "${{ parameters.locationCode }}" \
+                  "${{ parameters.instanceNumber }}" \
+                  "${{ parameters.location }}" \
+                  "${{ parameters.owner }}" \
+                  "${{ parameters.managedBy }}" \
+                  "${{ parameters.subnetResourceId }}" \
+                  "${{ parameters.logAnalyticsWorkspaceResourceId }}"
+
+  - stage: Deploy
+    displayName: "Deploy DevCenter Deployment Stack"
+    dependsOn:
+      - Validate
+      - WhatIf
+    # Runs for: Deploy only
+    condition: |
+      and(
+        eq(dependencies.Validate.result, 'Succeeded'),
+        in(dependencies.WhatIf.result, 'Succeeded', 'Skipped'),
+        eq('${{ parameters.deploymentStage }}', 'Deploy')
+      )
+    jobs:
+      - deployment: DeployDevCenterStack
+        displayName: "Deploy DevCenter Stack"
+        environment: "${{ parameters.environment }}"
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - checkout: self
+
+                - task: AzureCLI@2
+                  displayName: "Deploy DevCenter Deployment Stack"
+                  inputs:
+                    azureSubscription: "$(azureServiceConnection)"
+                    scriptType: "bash"
+                    scriptLocation: "inlineScript"
+                    inlineScript: |
+                      bash $(scriptsPath)/dc-deploy-stack.sh \
+                        "${{ parameters.subscriptionId }}" \
+                        "$(templateFile)" \
+                        "$(parametersFile)" \
+                        "$(deploymentLocation)" \
+                        "$(stackName)" \
+                        "${{ parameters.denySettingsMode }}" \
+                        "${{ parameters.actionOnUnmanage }}" \
+                        "${{ parameters.workloadAlias }}" \
+                        "${{ parameters.environment }}" \
+                        "${{ parameters.locationCode }}" \
+                        "${{ parameters.instanceNumber }}" \
+                        "${{ parameters.location }}" \
+                        "${{ parameters.owner }}" \
+                        "${{ parameters.managedBy }}" \
+                        "${{ parameters.subnetResourceId }}" \
+                        "${{ parameters.logAnalyticsWorkspaceResourceId }}"
+
+  - stage: Remove
+    displayName: "Remove DevCenter Deployment Stack"
+    dependsOn:
+      - Validate
+    # Runs for: Remove only
+    condition: |
+      and(
+        eq(dependencies.Validate.result, 'Succeeded'),
+        eq('${{ parameters.deploymentStage }}', 'Remove')
+      )
+    jobs:
+      - deployment: RemoveDevCenterStack
+        displayName: "Remove DevCenter Stack"
+        environment: "${{ parameters.environment }}"
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - checkout: self
+
+                - task: AzureCLI@2
+                  displayName: "Delete DevCenter Deployment Stack"
+                  inputs:
+                    azureSubscription: "$(azureServiceConnection)"
+                    scriptType: "bash"
+                    scriptLocation: "inlineScript"
+                    inlineScript: |
+                      bash $(scriptsPath)/dc-delete-stack.sh \
+                        "${{ parameters.subscriptionId }}" \
+                        "$(stackName)" \
+                        "${{ parameters.actionOnUnmanage }}"

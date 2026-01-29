@@ -1,0 +1,160 @@
+# Azure Pipeline to deploy Management Group Hierarchy
+# This pipeline deploys the mg-hierarchy Bicep template at TENANT scope
+#
+# =============================================================================
+# DEPLOYMENT SCOPE: TENANT
+# =============================================================================
+# This pipeline uses tenant-scoped deployment (az deployment tenant) to avoid
+# validation issues when creating management groups with parent MGs that don't
+# exist yet. ARM validates all scopes BEFORE deployment starts, so management
+# group scoped deployments would fail when targeting non-existent parent MGs.
+#
+# =============================================================================
+# RBAC REQUIREMENTS
+# =============================================================================
+# The service principal used by the Azure service connection requires:
+#
+#   1. Contributor at Tenant Root (/) - For tenant-scoped deployments
+#   2. Management Group Contributor at Tenant Root MG - To create/update MGs
+#
+# Note: Tenant Root (/) is different from Tenant Root Management Group!
+#
+# To assign these roles, run (as Owner/User Access Administrator):
+#
+#   SP_OBJECT_ID="<service-principal-object-id>"
+#   TENANT_ROOT_MG=$(az account management-group list \
+#     --query "[?displayName=='Tenant Root Group'].name" -o tsv)
+#
+#   # Contributor at Tenant Root (for az deployment tenant)
+#   az role assignment create --assignee "$SP_OBJECT_ID" \
+#     --role "Contributor" --scope "/"
+#
+#   # Management Group Contributor at Tenant Root MG
+#   az role assignment create --assignee "$SP_OBJECT_ID" \
+#     --role "Management Group Contributor" \
+#     --scope "/providers/Microsoft.Management/managementGroups/$TENANT_ROOT_MG"
+#
+# See docs/RBAC-Requirements.md for full documentation.
+# =============================================================================
+
+trigger: none
+pr: none
+
+pool:
+  vmImage: "ubuntu-latest"
+
+variables:
+  - group: common-variables
+  - group: mg-hierarchy-variables
+  - name: bicepPath
+    value: "code/bicep/mg-hierarchy"
+  - name: templateFile
+    value: "$(bicepPath)/mg-hierarchy.bicep"
+  - name: parametersFile
+    value: "$(bicepPath)/mg-hierarchy.bicepparam"
+  - name: scriptsPath
+    value: "code/pipelines/mg-hierarchy"
+
+parameters:
+  - name: deploymentStage
+    displayName: "Pipeline Stage to Run"
+    type: string
+    default: "WhatIf"
+    values:
+      - Validation
+      - WhatIf
+      - Deploy
+
+stages:
+  - stage: Validate
+    displayName: "Validate Bicep Template"
+    # Runs for: Validation, WhatIf, Deploy (all options)
+    jobs:
+      - job: ValidateBicep
+        displayName: "Validate Bicep"
+        steps:
+          - checkout: self
+
+          - task: AzureCLI@2
+            displayName: "Validate Management Group Deployment"
+            inputs:
+              azureSubscription: "$(azureServiceConnection)"
+              scriptType: "bash"
+              scriptLocation: "inlineScript"
+              inlineScript: |
+                bash $(scriptsPath)/mgh-validate-deployment.sh \
+                  "$(templateFile)" \
+                  "$(parametersFile)" \
+                  "$(deploymentLocation)" \
+                  "$(azureTenantId)" \
+                  "$(orgName)" \
+                  "$(orgDisplayName)"
+
+  - stage: WhatIf
+    displayName: "What-If Analysis"
+    dependsOn:
+      - Validate
+    # Runs for: WhatIf, Deploy
+    condition: |
+      and(
+        eq(dependencies.Validate.result, 'Succeeded'),
+        in('${{ parameters.deploymentStage }}', 'WhatIf', 'Deploy')
+      )
+    jobs:
+      - job: WhatIfAnalysis
+        displayName: "What-If"
+        steps:
+          - checkout: self
+
+          - task: AzureCLI@2
+            displayName: "What-If Management Group Deployment"
+            inputs:
+              azureSubscription: "$(azureServiceConnection)"
+              scriptType: "bash"
+              scriptLocation: "inlineScript"
+              inlineScript: |
+                bash $(scriptsPath)/mgh-whatif-deployment.sh \
+                  "$(templateFile)" \
+                  "$(parametersFile)" \
+                  "$(deploymentLocation)" \
+                  "$(azureTenantId)" \
+                  "$(orgName)" \
+                  "$(orgDisplayName)"
+
+  - stage: Deploy
+    displayName: "Deploy Management Group Hierarchy"
+    dependsOn:
+      - Validate
+      - WhatIf
+    # Runs for: Deploy only
+    condition: |
+      and(
+        eq(dependencies.Validate.result, 'Succeeded'),
+        in(dependencies.WhatIf.result, 'Succeeded', 'Skipped'),
+        eq('${{ parameters.deploymentStage }}', 'Deploy')
+      )
+    jobs:
+      - deployment: DeployMgHierarchy
+        displayName: "Deploy MG Hierarchy"
+        environment: "live"
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - checkout: self
+
+                - task: AzureCLI@2
+                  displayName: "Deploy Management Group Hierarchy"
+                  inputs:
+                    azureSubscription: "$(azureServiceConnection)"
+                    scriptType: "bash"
+                    scriptLocation: "inlineScript"
+                    inlineScript: |
+                      bash $(scriptsPath)/mgh-deploy.sh \
+                        "mg-hierarchy-$(Build.BuildNumber)" \
+                        "$(templateFile)" \
+                        "$(parametersFile)" \
+                        "$(deploymentLocation)" \
+                        "$(azureTenantId)" \
+                        "$(orgName)" \
+                        "$(orgDisplayName)"

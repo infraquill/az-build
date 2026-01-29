@@ -1,0 +1,373 @@
+# Azure Pipeline to deploy Subscription Vending
+# This pipeline deploys the sub-vending Bicep template at the tenant scope
+# This pipeline is reusable and can be triggered with parameters
+#
+# =============================================================================
+# IMPLEMENTATION NOTE
+# =============================================================================
+# This implementation uses direct Bicep resource definitions rather than the
+# Azure Verified Module (AVM) sub-vending pattern. The AVM module was abandoned
+# due to a bug where it referenced an invalid API version (2025-04-01) for
+# Microsoft.Management/managementGroups. See sub-vending.bicep for details.
+#
+# =============================================================================
+# RBAC REQUIREMENTS
+# =============================================================================
+# The service principal used by the Azure service connection requires:
+#
+#   1. Owner - At Tenant Root MG for subscription creation and MG assignment
+#   2. Billing Permissions - Invoice Section Contributor (MCA) or
+#                            Enrollment Account Administrator (EA)
+#
+# Azure RBAC assignment:
+#
+#   SP_OBJECT_ID="<service-principal-object-id>"
+#   TENANT_ROOT_MG=$(az account management-group list \
+#     --query "[?displayName=='Tenant Root Group'].name" -o tsv)
+#
+#   az role assignment create --assignee "$SP_OBJECT_ID" \
+#     --role "Owner" \
+#     --scope "/providers/Microsoft.Management/managementGroups/$TENANT_ROOT_MG"
+#
+# Billing permissions must be assigned via Azure Portal:
+#   1. Go to Cost Management + Billing
+#   2. Navigate to your billing account/invoice section
+#   3. Add the SP as Invoice Section Contributor (MCA) or
+#      Enrollment Account Administrator (EA)
+#
+# See docs/RBAC-Requirements.md for full documentation.
+# =============================================================================
+
+trigger: none
+pr: none
+
+pool:
+  vmImage: "ubuntu-latest"
+
+variables:
+  - group: common-variables
+  - name: bicepPath
+    value: "code/bicep/sub-vending"
+  - name: templateFile
+    value: "$(bicepPath)/sub-vending.bicep"
+  - name: parametersFile
+    value: "$(bicepPath)/sub-vending.bicepparam"
+  - name: scriptsPath
+    value: "code/pipelines/sub-vending"
+  - name: templatesPath
+    value: "code/pipelines/templates"
+
+parameters:
+  - name: projectName
+    displayName: "Project Name (used for tagging)"
+    type: string
+    default: ""
+  - name: workloadAlias
+    displayName: "Workload Alias (used for naming conventions)"
+    type: string
+    default: ""
+  - name: environment
+    displayName: "Environment"
+    type: string
+    default: ""
+    values:
+      - nonprod
+      - dev
+      - test
+      - uat
+      - staging
+      - prod
+      - live
+  - name: locationCode
+    displayName: "Location Code (e.g., cac for canada central)"
+    type: string
+    default: "cac"
+  - name: instanceNumber
+    displayName: "Instance Number (e.g., 001 for the first instance)"
+    type: string
+    default: ""
+  - name: managementGroupId
+    displayName: "Management Group ID"
+    type: string
+    default: ""
+    values:
+      - $(azureTenantId)
+      - "mg-platform"
+      - "mg-landing-zone"
+      - "mg-sandbox"
+      - "mg-decommissioned"
+      - "mg-management"
+      - "mg-connectivity"
+      - "mg-corp-prod"
+      - "mg-corp-non-prod"
+      - "mg-online-prod"
+      - "mg-online-non-prod"
+  - name: workload
+    displayName: "Workload Type"
+    type: string
+    default: "Production"
+    values:
+      - Production
+      - DevTest
+  - name: managedBy
+    displayName: "Managed By"
+    type: string
+    default: "$(managedBy)"
+  - name: owner
+    displayName: "Owner"
+    type: string
+    default: "$(defaultOwner)"
+  - name: deploymentStage
+    displayName: "Pipeline Stage to Run"
+    type: string
+    default: "WhatIf"
+    values:
+      - Validation
+      - WhatIf
+      - Deploy
+
+stages:
+  - stage: Validate
+    displayName: "Validate Bicep Template"
+    # Runs for: Validation, WhatIf, Deploy (all options)
+    jobs:
+      - job: ValidateBicep
+        displayName: "Validate Bicep"
+        timeoutInMinutes: 25
+        steps:
+          - checkout: self
+
+          - script: |
+              bash $(templatesPath)/compute-resource-alias.sh \
+                "subcr" \
+                "${{ parameters.workloadAlias }}" \
+                "${{ parameters.environment }}" \
+                "${{ parameters.locationCode }}" \
+                "${{ parameters.instanceNumber }}"
+            name: ComputeAlias
+            displayName: "Compute Subscription Alias"
+
+          - task: AzureCLI@2
+            name: LookupSubscription
+            displayName: "Lookup Existing Subscription"
+            inputs:
+              azureSubscription: "$(azureServiceConnection)"
+              scriptType: "bash"
+              scriptLocation: "inlineScript"
+              inlineScript: |
+                bash $(templatesPath)/lookup-subscription.sh \
+                  "$(ComputeAlias.RESOURCE_ALIAS)"
+
+          - task: AzureCLI@2
+            displayName: "Validate Permissions for Subscription Creation"
+            inputs:
+              azureSubscription: "$(azureServiceConnection)"
+              scriptType: "bash"
+              scriptLocation: "inlineScript"
+              inlineScript: |
+                bash $(scriptsPath)/sv-validate-permissions.sh \
+                  "$(LookupSubscription.EXISTING_SUBSCRIPTION_ID)"
+
+          - task: AzureCLI@2
+            name: ConstructBillingScope
+            displayName: "Construct Billing Scope"
+            inputs:
+              azureSubscription: "$(azureServiceConnection)"
+              scriptType: "bash"
+              scriptLocation: "inlineScript"
+              inlineScript: |
+                bash $(scriptsPath)/sv-construct-billing-scope.sh \
+                  "$(billingAccountId)" \
+                  "$(invoiceSectionId)" \
+                  "$(billingProfileId)" \
+                  "$(enrollmentAccountId)"
+
+          - task: AzureCLI@2
+            displayName: "Validate Subscription Vending Deployment"
+            inputs:
+              azureSubscription: "$(azureServiceConnection)"
+              scriptType: "bash"
+              scriptLocation: "inlineScript"
+              inlineScript: |
+                bash $(scriptsPath)/sv-validate-deployment.sh \
+                  "$(templateFile)" \
+                  "$(parametersFile)" \
+                  "$(deploymentLocation)" \
+                  "$(ConstructBillingScope.BILLING_SCOPE)" \
+                  "$(LookupSubscription.EXISTING_SUBSCRIPTION_ID)" \
+                  "${{ parameters.projectName }}" \
+                  "${{ parameters.managementGroupId }}" \
+                  "${{ parameters.workload }}" \
+                  "${{ parameters.workloadAlias }}" \
+                  "${{ parameters.environment }}" \
+                  "${{ parameters.locationCode }}" \
+                  "${{ parameters.instanceNumber }}" \
+                  "${{ parameters.owner }}" \
+                  "${{ parameters.managedBy }}"
+
+  - stage: WhatIf
+    displayName: "What-If Analysis"
+    dependsOn:
+      - Validate
+    # Runs for: WhatIf, Deploy
+    condition: |
+      and(
+        eq(dependencies.Validate.result, 'Succeeded'),
+        in('${{ parameters.deploymentStage }}', 'WhatIf', 'Deploy')
+      )
+    jobs:
+      - job: WhatIfAnalysis
+        displayName: "What-If"
+        timeoutInMinutes: 25
+        steps:
+          - checkout: self
+
+          - script: |
+              bash $(templatesPath)/compute-resource-alias.sh \
+                "subcr" \
+                "${{ parameters.workloadAlias }}" \
+                "${{ parameters.environment }}" \
+                "${{ parameters.locationCode }}" \
+                "${{ parameters.instanceNumber }}"
+            name: ComputeAlias
+            displayName: "Compute Subscription Alias"
+
+          - task: AzureCLI@2
+            name: LookupSubscription
+            displayName: "Lookup Existing Subscription"
+            inputs:
+              azureSubscription: "$(azureServiceConnection)"
+              scriptType: "bash"
+              scriptLocation: "inlineScript"
+              inlineScript: |
+                bash $(templatesPath)/lookup-subscription.sh \
+                  "$(ComputeAlias.RESOURCE_ALIAS)"
+
+          - task: AzureCLI@2
+            name: ConstructBillingScope
+            displayName: "Construct Billing Scope"
+            inputs:
+              azureSubscription: "$(azureServiceConnection)"
+              scriptType: "bash"
+              scriptLocation: "inlineScript"
+              inlineScript: |
+                bash $(scriptsPath)/sv-construct-billing-scope.sh \
+                  "$(billingAccountId)" \
+                  "$(invoiceSectionId)" \
+                  "$(billingProfileId)" \
+                  "$(enrollmentAccountId)"
+
+          - task: AzureCLI@2
+            displayName: "What-If Subscription Vending Deployment"
+            inputs:
+              azureSubscription: "$(azureServiceConnection)"
+              scriptType: "bash"
+              scriptLocation: "inlineScript"
+              inlineScript: |
+                bash $(scriptsPath)/sv-whatif-deployment.sh \
+                  "$(templateFile)" \
+                  "$(parametersFile)" \
+                  "$(deploymentLocation)" \
+                  "$(ConstructBillingScope.BILLING_SCOPE)" \
+                  "$(LookupSubscription.EXISTING_SUBSCRIPTION_ID)" \
+                  "${{ parameters.projectName }}" \
+                  "${{ parameters.managementGroupId }}" \
+                  "${{ parameters.workload }}" \
+                  "${{ parameters.workloadAlias }}" \
+                  "${{ parameters.environment }}" \
+                  "${{ parameters.locationCode }}" \
+                  "${{ parameters.instanceNumber }}" \
+                  "${{ parameters.owner }}" \
+                  "${{ parameters.managedBy }}"
+
+  - stage: Deploy
+    displayName: "Deploy Subscription Vending"
+    dependsOn:
+      - Validate
+      - WhatIf
+    # Runs for: Deploy only
+    condition: |
+      and(
+        eq(dependencies.Validate.result, 'Succeeded'),
+        in(dependencies.WhatIf.result, 'Succeeded', 'Skipped'),
+        eq('${{ parameters.deploymentStage }}', 'Deploy')
+      )
+    jobs:
+      - deployment: DeploySubscriptionVending
+        displayName: "Deploy Subscription Vending"
+        timeoutInMinutes: 90
+        environment: "${{ parameters.environment }}"
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - checkout: self
+
+                - script: |
+                    bash $(templatesPath)/compute-resource-alias.sh \
+                      "subcr" \
+                      "${{ parameters.workloadAlias }}" \
+                      "${{ parameters.environment }}" \
+                      "${{ parameters.locationCode }}" \
+                      "${{ parameters.instanceNumber }}"
+                  name: ComputeAlias
+                  displayName: "Compute Subscription Alias"
+
+                - task: AzureCLI@2
+                  name: LookupSubscription
+                  displayName: "Lookup Existing Subscription"
+                  inputs:
+                    azureSubscription: "$(azureServiceConnection)"
+                    scriptType: "bash"
+                    scriptLocation: "inlineScript"
+                    inlineScript: |
+                      bash $(templatesPath)/lookup-subscription.sh \
+                        "$(ComputeAlias.RESOURCE_ALIAS)"
+
+                - task: AzureCLI@2
+                  displayName: "Validate Permissions for Subscription Creation"
+                  inputs:
+                    azureSubscription: "$(azureServiceConnection)"
+                    scriptType: "bash"
+                    scriptLocation: "inlineScript"
+                    inlineScript: |
+                      bash $(scriptsPath)/sv-validate-permissions.sh \
+                        "$(LookupSubscription.EXISTING_SUBSCRIPTION_ID)"
+
+                - task: AzureCLI@2
+                  name: ConstructBillingScope
+                  displayName: "Construct Billing Scope"
+                  inputs:
+                    azureSubscription: "$(azureServiceConnection)"
+                    scriptType: "bash"
+                    scriptLocation: "inlineScript"
+                    inlineScript: |
+                      bash $(scriptsPath)/sv-construct-billing-scope.sh \
+                        "$(billingAccountId)" \
+                        "$(invoiceSectionId)" \
+                        "$(billingProfileId)" \
+                        "$(enrollmentAccountId)"
+
+                - task: AzureCLI@2
+                  displayName: "Deploy Subscription Vending"
+                  inputs:
+                    azureSubscription: "$(azureServiceConnection)"
+                    scriptType: "bash"
+                    scriptLocation: "inlineScript"
+                    inlineScript: |
+                      bash $(scriptsPath)/sv-deploy.sh \
+                        "$(templateFile)" \
+                        "$(parametersFile)" \
+                        "$(deploymentLocation)" \
+                        "$(ConstructBillingScope.BILLING_SCOPE)" \
+                        "$(LookupSubscription.EXISTING_SUBSCRIPTION_ID)" \
+                        "${{ parameters.projectName }}" \
+                        "${{ parameters.managementGroupId }}" \
+                        "${{ parameters.workload }}" \
+                        "${{ parameters.workloadAlias }}" \
+                        "${{ parameters.environment }}" \
+                        "${{ parameters.locationCode }}" \
+                        "${{ parameters.instanceNumber }}" \
+                        "${{ parameters.owner }}" \
+                        "${{ parameters.managedBy }}" \
+                        "$(Build.BuildNumber)"

@@ -1,0 +1,331 @@
+# Azure Pipeline to deploy Hub Infrastructure using Deployment Stacks
+# This pipeline deploys the hub Bicep template as a Deployment Stack at subscription scope
+# Deploys hub networking infrastructure including VNet, Network Watcher, Private DNS, AVNM, and optional resources
+#
+# =============================================================================
+# RBAC REQUIREMENTS
+# =============================================================================
+# The service principal used by the Azure service connection requires:
+#
+#   1. Contributor - On the hub/connectivity subscription
+#   2. Network Contributor - On the connectivity management group (for AVNM)
+#   3. User Access Administrator - If deploying RBAC-enabled resources (Key Vault)
+#
+# Assignment commands:
+#
+#   SP_OBJECT_ID="<service-principal-object-id>"
+#   SUBSCRIPTION_ID="<connectivity-subscription-id>"
+#   CONNECTIVITY_MG="mg-connectivity"
+#
+#   az role assignment create --assignee "$SP_OBJECT_ID" \
+#     --role "Contributor" \
+#     --scope "/subscriptions/$SUBSCRIPTION_ID"
+#
+#   az role assignment create --assignee "$SP_OBJECT_ID" \
+#     --role "Network Contributor" \
+#     --scope "/providers/Microsoft.Management/managementGroups/$CONNECTIVITY_MG"
+#
+# See docs/RBAC-Requirements.md for full documentation.
+# =============================================================================
+
+trigger: none
+pr: none
+
+pool:
+  vmImage: "ubuntu-latest"
+
+variables:
+  - group: common-variables
+  - group: hub-variables
+  - name: bicepPath
+    value: "code/bicep/hub"
+  - name: templateFile
+    value: "$(bicepPath)/hub.bicep"
+  - name: parametersFile
+    value: "$(bicepPath)/hub.bicepparam"
+  - name: scriptsPath
+    value: "code/pipelines/hub"
+  - name: stackName
+    value: "stack-${{ parameters.workloadAlias }}-${{ parameters.environment }}-${{ parameters.locationCode }}-${{ parameters.instanceNumber }}"
+
+parameters:
+  - name: workloadAlias
+    displayName: "Workload Alias"
+    type: string
+    default: "hub"
+  - name: environment
+    displayName: "Environment"
+    type: string
+    default: "live"
+    values:
+      - nonprod
+      - dev
+      - test
+      - uat
+      - staging
+      - prod
+      - live
+  - name: locationCode
+    displayName: "Location Code (e.g., cac for canada central)"
+    type: string
+    default: "cac"
+  - name: instanceNumber
+    displayName: "Instance Number (e.g., 001 for the first instance)"
+    type: string
+    default: "001"
+  - name: location
+    displayName: "Azure Region"
+    type: string
+    default: "canadacentral"
+  - name: hubVnetAddressSpace
+    displayName: "Hub VNet Address Space"
+    type: string
+    default: "10.0.0.0/16"
+  # Optional resource flags
+  - name: enableAppGatewayWAF
+    displayName: "Enable Application Gateway with WAF"
+    type: boolean
+    default: false
+  - name: enableFrontDoor
+    displayName: "Enable Azure Front Door (Standard)"
+    type: boolean
+    default: false
+  - name: enableVpnGateway
+    displayName: "Enable VPN Gateway with P2S"
+    type: boolean
+    default: false
+  - name: enableAzureFirewall
+    displayName: "Enable Azure Firewall"
+    type: boolean
+    default: false
+  - name: enableDDoSProtection
+    displayName: "Enable DDoS Protection"
+    type: boolean
+    default: false
+  - name: enableDnsResolver
+    displayName: "Enable Private DNS Resolver"
+    type: boolean
+    default: false
+  - name: enableIpamPool
+    displayName: "Enable IPAM Pool"
+    type: boolean
+    default: false
+  - name: ipamPoolAddressSpace
+    displayName: "IPAM Pool Address Space"
+    type: string
+    default: "10.0.0.0/8"
+  - name: ipamPoolDescription
+    displayName: "IPAM Pool Description"
+    type: string
+    default: "Centralized IPAM pool for hub and spoke networks"
+  # Optional resource configuration
+  - name: vpnClientAddressPoolPrefix
+    displayName: "VPN Client Address Pool Prefix (for P2S)"
+    type: string
+    default: "172.16.0.0/24"
+  - name: azureFirewallTier
+    displayName: "Azure Firewall SKU Tier"
+    type: string
+    default: "Standard"
+    values:
+      - Standard
+      - Premium
+  # Deployment Stack settings
+  - name: denySettingsMode
+    displayName: "Deny Settings Mode"
+    type: string
+    default: "denyWriteAndDelete"
+    values:
+      - none
+      - denyDelete
+      - denyWriteAndDelete
+  - name: actionOnUnmanage
+    displayName: "Action on Unmanaged Resources"
+    type: string
+    default: "detachAll"
+    values:
+      - deleteResources
+      - deleteAll
+      - detachAll
+  - name: deploymentStage
+    displayName: "Pipeline Stage to Run"
+    type: string
+    default: "Preview"
+    values:
+      - Validation
+      - Preview
+      - Deploy
+      - Remove
+
+stages:
+  - stage: Validate
+    displayName: "Validate Deployment Stack"
+    # Runs for: Validation, Preview, Deploy (all options)
+    jobs:
+      - template: ../templates/jobs/validate-environment-job.yaml
+        parameters:
+          environment: ${{ parameters.environment }}
+      - job: ValidateStack
+        displayName: "Validate Stack"
+        dependsOn: ValidateEnvironment
+        steps:
+          - checkout: self
+
+          - task: AzureCLI@2
+            displayName: "Validate Hub Deployment Stack"
+            inputs:
+              azureSubscription: "$(azureServiceConnection)"
+              scriptType: "bash"
+              scriptLocation: "inlineScript"
+              inlineScript: |
+                bash $(scriptsPath)/hub-validate-stack.sh \
+                  "$(hubSubscriptionId)" \
+                  "$(templateFile)" \
+                  "$(parametersFile)" \
+                  "$(deploymentLocation)" \
+                  "$(stackName)" \
+                  "${{ parameters.denySettingsMode }}" \
+                  "${{ parameters.actionOnUnmanage }}" \
+                  "${{ parameters.workloadAlias }}" \
+                  "${{ parameters.environment }}" \
+                  "${{ parameters.locationCode }}" \
+                  "${{ parameters.instanceNumber }}" \
+                  "${{ parameters.location }}" \
+                  "$(privateDnsZoneName)" \
+                  "${{ parameters.hubVnetAddressSpace }}" \
+                  "$(logAnalyticsWorkspaceResourceId)" \
+                  "$(defaultOwner)" \
+                  "$(managedBy)" \
+                  "$(avnmManagementGroupId)" \
+                  "${{ parameters.enableAppGatewayWAF }}" \
+                  "${{ parameters.enableFrontDoor }}" \
+                  "${{ parameters.enableVpnGateway }}" \
+                  "${{ parameters.enableAzureFirewall }}" \
+                  "${{ parameters.enableDDoSProtection }}" \
+                  "${{ parameters.enableDnsResolver }}" \
+                  "${{ parameters.enableIpamPool }}" \
+                  "${{ parameters.ipamPoolAddressSpace }}" \
+                  "${{ parameters.ipamPoolDescription }}" \
+                  "${{ parameters.vpnClientAddressPoolPrefix }}" \
+                  "${{ parameters.azureFirewallTier }}" \
+                  "$(keyVaultAdminPrincipalId)"
+
+  - stage: Preview
+    displayName: "Preview Stack State"
+    dependsOn:
+      - Validate
+    # Runs for: Preview, Deploy
+    condition: |
+      and(
+        eq(dependencies.Validate.result, 'Succeeded'),
+        in('${{ parameters.deploymentStage }}', 'Preview', 'Deploy')
+      )
+    jobs:
+      - job: PreviewStack
+        displayName: "Preview Stack"
+        steps:
+          - checkout: self
+
+          - task: AzureCLI@2
+            displayName: "Preview Stack State"
+            inputs:
+              azureSubscription: "$(azureServiceConnection)"
+              scriptType: "bash"
+              scriptLocation: "inlineScript"
+              inlineScript: |
+                bash $(scriptsPath)/hub-preview-stack.sh \
+                  "$(hubSubscriptionId)" \
+                  "$(stackName)"
+
+  - stage: Deploy
+    displayName: "Deploy Hub Deployment Stack"
+    dependsOn:
+      - Validate
+      - Preview
+    # Runs for: Deploy only
+    condition: |
+      and(
+        eq(dependencies.Validate.result, 'Succeeded'),
+        in(dependencies.Preview.result, 'Succeeded', 'Skipped'),
+        eq('${{ parameters.deploymentStage }}', 'Deploy')
+      )
+    jobs:
+      - deployment: DeployHubStack
+        displayName: "Deploy Hub Stack"
+        environment: "${{ parameters.environment }}"
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - checkout: self
+
+                - task: AzureCLI@2
+                  displayName: "Deploy Hub Deployment Stack"
+                  inputs:
+                    azureSubscription: "$(azureServiceConnection)"
+                    scriptType: "bash"
+                    scriptLocation: "inlineScript"
+                    inlineScript: |
+                      bash $(scriptsPath)/hub-deploy-stack.sh \
+                        "$(hubSubscriptionId)" \
+                        "$(templateFile)" \
+                        "$(parametersFile)" \
+                        "$(deploymentLocation)" \
+                        "$(stackName)" \
+                        "${{ parameters.denySettingsMode }}" \
+                        "${{ parameters.actionOnUnmanage }}" \
+                        "${{ parameters.workloadAlias }}" \
+                        "${{ parameters.environment }}" \
+                        "${{ parameters.locationCode }}" \
+                        "${{ parameters.instanceNumber }}" \
+                        "${{ parameters.location }}" \
+                        "$(privateDnsZoneName)" \
+                        "${{ parameters.hubVnetAddressSpace }}" \
+                        "$(logAnalyticsWorkspaceResourceId)" \
+                        "$(defaultOwner)" \
+                        "$(managedBy)" \
+                        "$(avnmManagementGroupId)" \
+                        "${{ parameters.enableAppGatewayWAF }}" \
+                        "${{ parameters.enableFrontDoor }}" \
+                        "${{ parameters.enableVpnGateway }}" \
+                        "${{ parameters.enableAzureFirewall }}" \
+                        "${{ parameters.enableDDoSProtection }}" \
+                        "${{ parameters.enableDnsResolver }}" \
+                        "${{ parameters.enableIpamPool }}" \
+                        "${{ parameters.ipamPoolAddressSpace }}" \
+                        "${{ parameters.ipamPoolDescription }}" \
+                        "${{ parameters.vpnClientAddressPoolPrefix }}" \
+                        "${{ parameters.azureFirewallTier }}" \
+                        "$(keyVaultAdminPrincipalId)"
+
+  - stage: Remove
+    displayName: "Remove Hub Deployment Stack"
+    dependsOn:
+      - Validate
+    # Runs for: Remove only
+    condition: |
+      and(
+        eq(dependencies.Validate.result, 'Succeeded'),
+        eq('${{ parameters.deploymentStage }}', 'Remove')
+      )
+    jobs:
+      - deployment: RemoveHubStack
+        displayName: "Remove Hub Stack"
+        environment: "${{ parameters.environment }}"
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - checkout: self
+
+                - task: AzureCLI@2
+                  displayName: "Delete Hub Deployment Stack"
+                  inputs:
+                    azureSubscription: "$(azureServiceConnection)"
+                    scriptType: "bash"
+                    scriptLocation: "inlineScript"
+                    inlineScript: |
+                      bash $(scriptsPath)/hub-delete-stack.sh \
+                        "$(hubSubscriptionId)" \
+                        "$(stackName)" \
+                        "${{ parameters.actionOnUnmanage }}"

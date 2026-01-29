@@ -1,0 +1,16 @@
+# Validate Environment Job Template
+# Validates that the environment parameter is in the allowed list from common-variables
+parameters:
+  - name: environment
+    type: string
+
+jobs:
+  - job: ValidateEnvironment
+    displayName: "Validate Environment"
+    steps:
+      - checkout: self
+      - script: |
+          bash code/pipelines/templates/validate-environment.sh \
+            "$(environments)" \
+            "${{ parameters.environment }}"
+        displayName: "Validate Environment Parameter"

@@ -1,0 +1,342 @@
+# Azure Pipeline to deploy Spoke Networking Infrastructure using Deployment Stacks
+# This pipeline deploys the spoke-networking Bicep template as a Deployment Stack at subscription scope
+# Deploys spoke networking infrastructure including VNet, Private DNS link, and optional IPAM allocation
+# AVNM automatically connects spokes to hub when in the connectivity management group scope
+#
+# =============================================================================
+# RBAC REQUIREMENTS
+# =============================================================================
+# The service principal used by the Azure service connection requires:
+#
+#   1. Contributor - On the spoke subscription (for VNet and resources)
+#   2. Network Contributor - On the hub resource group (for Private DNS Zone link)
+#   3. Contributor - On the hub resource group (if using IPAM allocation)
+#
+# This is a cross-subscription deployment, so permissions are needed on both:
+#
+#   SP_OBJECT_ID="<service-principal-object-id>"
+#   SPOKE_SUBSCRIPTION_ID="<spoke-subscription-id>"
+#   HUB_SUBSCRIPTION_ID="<hub-subscription-id>"
+#   HUB_RESOURCE_GROUP="rg-hub-live-cac-001"
+#
+#   # Spoke subscription
+#   az role assignment create --assignee "$SP_OBJECT_ID" \
+#     --role "Contributor" \
+#     --scope "/subscriptions/$SPOKE_SUBSCRIPTION_ID"
+#
+#   # Hub resource group (for DNS zone link and IPAM)
+#   az role assignment create --assignee "$SP_OBJECT_ID" \
+#     --role "Network Contributor" \
+#     --scope "/subscriptions/$HUB_SUBSCRIPTION_ID/resourceGroups/$HUB_RESOURCE_GROUP"
+#
+# See docs/RBAC-Requirements.md for full documentation.
+# =============================================================================
+
+trigger: none
+pr: none
+
+pool:
+  vmImage: "ubuntu-latest"
+
+variables:
+  - group: common-variables
+  - name: bicepPath
+    value: "code/bicep/spoke"
+  - name: templateFile
+    value: "$(bicepPath)/spoke-networking.bicep"
+  - name: parametersFile
+    value: "$(bicepPath)/spoke-networking.bicepparam"
+  - name: scriptsPath
+    value: "code/pipelines/spoke-networking"
+  - name: stackName
+    value: "stack-${{ parameters.workloadAlias }}-${{ parameters.environment }}-${{ parameters.locationCode }}-${{ parameters.instanceNumber }}"
+
+parameters:
+  # Target spoke subscription
+  - name: subscriptionId
+    displayName: "Spoke Subscription ID"
+    type: string
+    default: ""
+  # Core naming parameters
+  - name: workloadAlias
+    displayName: "Workload Alias"
+    type: string
+    default: ""
+  - name: environment
+    displayName: "Environment"
+    type: string
+    default: "dev"
+    values:
+      - nonprod
+      - dev
+      - test
+      - uat
+      - staging
+      - prod
+      - live
+  - name: locationCode
+    displayName: "Location Code (e.g., cac for canada central)"
+    type: string
+    default: "cac"
+  - name: instanceNumber
+    displayName: "Instance Number (e.g., 001 for the first instance)"
+    type: string
+    default: "001"
+  - name: location
+    displayName: "Azure Region"
+    type: string
+    default: "canadacentral"
+  # Spoke VNet configuration
+  - name: spokeVnetAddressSpace
+    displayName: "Spoke VNet Address Space (e.g., 10.1.0.0/16)"
+    type: string
+    default: ""
+  # Monitoring
+  - name: logAnalyticsWorkspaceResourceId
+    displayName: "Log Analytics Workspace Resource ID (from monitoring infrastructure)"
+    type: string
+  # Ownership
+  - name: owner
+    displayName: "Owner (e.g. workload-team@example.com)"
+    type: string
+    default: ""
+  - name: managedBy
+    displayName: "Managed By"
+    type: string
+    default: "Bicep"
+  # Hub infrastructure references
+  - name: hubPrivateDnsZoneName
+    displayName: "Hub Private DNS Zone Name (e.g., internal.organization.com)"
+    type: string
+    default: "internal.organization.com"
+  - name: hubPrivateDnsZoneResourceId
+    displayName: "Hub Private DNS Zone Resource ID"
+    type: string
+    default: ""
+  - name: hubResourceGroupName
+    displayName: "Hub Resource Group Name"
+    type: string
+    default: "rg-hub-live-cac-001"
+  - name: hubSubscriptionId
+    displayName: "Hub Subscription ID"
+    type: string
+    default: ""
+  # IPAM configuration (optional)
+  - name: enableIpamAllocation
+    displayName: "Enable IPAM Static CIDR Allocation"
+    type: boolean
+    default: false
+  - name: hubAvnmName
+    displayName: "Hub AVNM Name (required if IPAM enabled)"
+    type: string
+    default: ""
+  - name: hubIpamPoolName
+    displayName: "Hub IPAM Pool Name (required if IPAM enabled)"
+    type: string
+    default: ""
+  # Deployment Stack settings
+  - name: denySettingsMode
+    displayName: "Deny Settings Mode"
+    type: string
+    default: "denyWriteAndDelete"
+    values:
+      - none
+      - denyDelete
+      - denyWriteAndDelete
+  - name: actionOnUnmanage
+    displayName: "Action on Unmanaged Resources"
+    type: string
+    default: "detachAll"
+    values:
+      - deleteResources
+      - deleteAll
+      - detachAll
+  - name: deploymentStage
+    displayName: "Pipeline Stage to Run"
+    type: string
+    default: "WhatIf"
+    values:
+      - Validation
+      - WhatIf
+      - Deploy
+      - Remove
+
+stages:
+  - stage: Validate
+    displayName: "Validate Deployment Stack"
+    # Runs for: Validation, WhatIf, Deploy (all options)
+    jobs:
+      - template: ../templates/jobs/validate-environment-job.yaml
+        parameters:
+          environment: ${{ parameters.environment }}
+      - job: ValidateStack
+        displayName: "Validate Stack"
+        dependsOn: ValidateEnvironment
+        steps:
+          - checkout: self
+
+          - task: AzureCLI@2
+            displayName: "Validate Spoke Networking Deployment Stack"
+            inputs:
+              azureSubscription: "$(azureServiceConnection)"
+              scriptType: "bash"
+              scriptLocation: "inlineScript"
+              inlineScript: |
+                bash $(scriptsPath)/spoke-validate-stack.sh \
+                  "${{ parameters.subscriptionId }}" \
+                  "$(templateFile)" \
+                  "$(parametersFile)" \
+                  "$(deploymentLocation)" \
+                  "$(stackName)" \
+                  "${{ parameters.denySettingsMode }}" \
+                  "${{ parameters.actionOnUnmanage }}" \
+                  "${{ parameters.workloadAlias }}" \
+                  "${{ parameters.environment }}" \
+                  "${{ parameters.locationCode }}" \
+                  "${{ parameters.instanceNumber }}" \
+                  "${{ parameters.location }}" \
+                  "${{ parameters.spokeVnetAddressSpace }}" \
+                  "${{ parameters.logAnalyticsWorkspaceResourceId }}" \
+                  "${{ parameters.owner }}" \
+                  "${{ parameters.managedBy }}" \
+                  "${{ parameters.hubPrivateDnsZoneName }}" \
+                  "${{ parameters.hubPrivateDnsZoneResourceId }}" \
+                  "${{ parameters.hubResourceGroupName }}" \
+                  "${{ parameters.hubSubscriptionId }}" \
+                  "${{ parameters.enableIpamAllocation }}" \
+                  "${{ parameters.hubAvnmName }}" \
+                  "${{ parameters.hubIpamPoolName }}"
+
+  - stage: WhatIf
+    displayName: "What-If Analysis"
+    dependsOn:
+      - Validate
+    # Runs for: WhatIf, Deploy
+    condition: |
+      and(
+        eq(dependencies.Validate.result, 'Succeeded'),
+        in('${{ parameters.deploymentStage }}', 'WhatIf', 'Deploy')
+      )
+    jobs:
+      - job: WhatIfAnalysis
+        displayName: "What-If"
+        steps:
+          - checkout: self
+
+          - task: AzureCLI@2
+            displayName: "What-If Spoke Networking Deployment Stack"
+            inputs:
+              azureSubscription: "$(azureServiceConnection)"
+              scriptType: "bash"
+              scriptLocation: "inlineScript"
+              inlineScript: |
+                bash $(scriptsPath)/spoke-whatif-stack.sh \
+                  "${{ parameters.subscriptionId }}" \
+                  "$(templateFile)" \
+                  "$(parametersFile)" \
+                  "$(deploymentLocation)" \
+                  "$(stackName)" \
+                  "${{ parameters.denySettingsMode }}" \
+                  "${{ parameters.actionOnUnmanage }}" \
+                  "${{ parameters.workloadAlias }}" \
+                  "${{ parameters.environment }}" \
+                  "${{ parameters.locationCode }}" \
+                  "${{ parameters.instanceNumber }}" \
+                  "${{ parameters.location }}" \
+                  "${{ parameters.spokeVnetAddressSpace }}" \
+                  "${{ parameters.logAnalyticsWorkspaceResourceId }}" \
+                  "${{ parameters.owner }}" \
+                  "${{ parameters.managedBy }}" \
+                  "${{ parameters.hubPrivateDnsZoneName }}" \
+                  "${{ parameters.hubPrivateDnsZoneResourceId }}" \
+                  "${{ parameters.hubResourceGroupName }}" \
+                  "${{ parameters.hubSubscriptionId }}" \
+                  "${{ parameters.enableIpamAllocation }}" \
+                  "${{ parameters.hubAvnmName }}" \
+                  "${{ parameters.hubIpamPoolName }}"
+
+  - stage: Deploy
+    displayName: "Deploy Spoke Networking Deployment Stack"
+    dependsOn:
+      - Validate
+      - WhatIf
+    # Runs for: Deploy only
+    condition: |
+      and(
+        eq(dependencies.Validate.result, 'Succeeded'),
+        in(dependencies.WhatIf.result, 'Succeeded', 'Skipped'),
+        eq('${{ parameters.deploymentStage }}', 'Deploy')
+      )
+    jobs:
+      - deployment: DeploySpokeStack
+        displayName: "Deploy Spoke Stack"
+        environment: "${{ parameters.environment }}"
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - checkout: self
+
+                - task: AzureCLI@2
+                  displayName: "Deploy Spoke Networking Deployment Stack"
+                  inputs:
+                    azureSubscription: "$(azureServiceConnection)"
+                    scriptType: "bash"
+                    scriptLocation: "inlineScript"
+                    inlineScript: |
+                      bash $(scriptsPath)/spoke-deploy-stack.sh \
+                        "${{ parameters.subscriptionId }}" \
+                        "$(templateFile)" \
+                        "$(parametersFile)" \
+                        "$(deploymentLocation)" \
+                        "$(stackName)" \
+                        "${{ parameters.denySettingsMode }}" \
+                        "${{ parameters.actionOnUnmanage }}" \
+                        "${{ parameters.workloadAlias }}" \
+                        "${{ parameters.environment }}" \
+                        "${{ parameters.locationCode }}" \
+                        "${{ parameters.instanceNumber }}" \
+                        "${{ parameters.location }}" \
+                        "${{ parameters.spokeVnetAddressSpace }}" \
+                        "${{ parameters.logAnalyticsWorkspaceResourceId }}" \
+                        "${{ parameters.owner }}" \
+                        "${{ parameters.managedBy }}" \
+                        "${{ parameters.hubPrivateDnsZoneName }}" \
+                        "${{ parameters.hubPrivateDnsZoneResourceId }}" \
+                        "${{ parameters.hubResourceGroupName }}" \
+                        "${{ parameters.hubSubscriptionId }}" \
+                        "${{ parameters.enableIpamAllocation }}" \
+                        "${{ parameters.hubAvnmName }}" \
+                        "${{ parameters.hubIpamPoolName }}"
+
+  - stage: Remove
+    displayName: "Remove Spoke Networking Deployment Stack"
+    dependsOn:
+      - Validate
+    # Runs for: Remove only
+    condition: |
+      and(
+        eq(dependencies.Validate.result, 'Succeeded'),
+        eq('${{ parameters.deploymentStage }}', 'Remove')
+      )
+    jobs:
+      - deployment: RemoveSpokeStack
+        displayName: "Remove Spoke Stack"
+        environment: "${{ parameters.environment }}"
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - checkout: self
+
+                - task: AzureCLI@2
+                  displayName: "Delete Spoke Networking Deployment Stack"
+                  inputs:
+                    azureSubscription: "$(azureServiceConnection)"
+                    scriptType: "bash"
+                    scriptLocation: "inlineScript"
+                    inlineScript: |
+                      bash $(scriptsPath)/spoke-delete-stack.sh \
+                        "${{ parameters.subscriptionId }}" \
+                        "$(stackName)" \
+                        "${{ parameters.actionOnUnmanage }}"

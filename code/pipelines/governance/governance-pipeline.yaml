@@ -1,0 +1,229 @@
+# Azure Pipeline to deploy Governance Compliance Policies
+# This pipeline deploys the governance Bicep template at management group scope
+# Assigns Microsoft Cloud Security Benchmark and Canada Federal PBMM policies in audit mode
+#
+# =============================================================================
+# RBAC REQUIREMENTS
+# =============================================================================
+# The service principal used by the Azure service connection requires:
+#
+#   1. Resource Policy Contributor - Create/update policy assignments
+#   2. User Access Administrator - Grant permissions to policy managed identities
+#   3. Contributor - For Microsoft.Resources/deployments/write permission
+#
+# Assign at the target management group scope:
+#
+#   SP_OBJECT_ID="<service-principal-object-id>"
+#   TARGET_MG="mg-arcnovus"
+#
+#   az role assignment create --assignee "$SP_OBJECT_ID" \
+#     --role "Resource Policy Contributor" \
+#     --scope "/providers/Microsoft.Management/managementGroups/$TARGET_MG"
+#
+#   az role assignment create --assignee "$SP_OBJECT_ID" \
+#     --role "User Access Administrator" \
+#     --scope "/providers/Microsoft.Management/managementGroups/$TARGET_MG"
+#
+# See docs/RBAC-Requirements.md for full documentation.
+# =============================================================================
+
+trigger: none
+pr: none
+
+pool:
+  vmImage: "ubuntu-latest"
+
+variables:
+  - group: common-variables
+  - name: bicepPath
+    value: "code/bicep/governance"
+  - name: templateFile
+    value: "$(bicepPath)/governance.bicep"
+  - name: parametersFile
+    value: "$(bicepPath)/governance.bicepparam"
+  - name: scriptsPath
+    value: "code/pipelines/governance"
+  - name: deploymentName
+    value: "governance-${{ parameters.environment }}-${{ parameters.locationCode }}-$(Build.BuildNumber)"
+
+parameters:
+  - name: managementGroupId
+    displayName: "Management Group ID (where policies will be assigned)"
+    type: string
+    default: "mg-platform"
+    values:
+      - $(azureTenantId)
+      - "mg-platform"
+      - "mg-landing-zone"
+      - "mg-sandbox"
+      - "mg-decommissioned"
+      - "mg-management"
+      - "mg-connectivity"
+      - "mg-corp-prod"
+      - "mg-corp-non-prod"
+      - "mg-online-prod"
+      - "mg-online-non-prod"
+  - name: environment
+    displayName: "Environment"
+    type: string
+    default: "live"
+    values:
+      - nonprod
+      - dev
+      - test
+      - uat
+      - staging
+      - prod
+      - live
+  - name: locationCode
+    displayName: "Location Code (e.g., cac for canada central)"
+    type: string
+    default: "cac"
+  - name: location
+    displayName: "Azure Region"
+    type: string
+    default: "canadacentral"
+  - name: owner
+    displayName: "Owner (e.g. a group mailbox like platform-team@example.com)"
+    type: string
+    default: "$(defaultOwner)"
+  - name: managedBy
+    displayName: "Managed By"
+    type: string
+    default: "$(managedBy)"
+  - name: enforcementMode
+    displayName: "Enforcement Mode"
+    type: string
+    default: "DoNotEnforce"
+    values:
+      - DoNotEnforce
+      - Default
+  - name: enableMCSB
+    displayName: "Enable Microsoft Cloud Security Benchmark"
+    type: boolean
+    default: true
+  - name: enableCanadaPBMM
+    displayName: "Enable Canada Federal PBMM"
+    type: boolean
+    default: true
+  - name: deploymentStage
+    displayName: "Pipeline Stage to Run"
+    type: string
+    default: "WhatIf"
+    values:
+      - Validation
+      - WhatIf
+      - Deploy
+
+stages:
+  - stage: Validate
+    displayName: "Validate Governance Deployment"
+    # Runs for: Validation, WhatIf, Deploy (all options)
+    jobs:
+      - template: ../templates/jobs/validate-environment-job.yaml
+        parameters:
+          environment: ${{ parameters.environment }}
+      - job: ValidateDeployment
+        displayName: "Validate Deployment"
+        dependsOn: ValidateEnvironment
+        steps:
+          - checkout: self
+
+          - task: AzureCLI@2
+            displayName: "Validate Governance Deployment"
+            inputs:
+              azureSubscription: "$(azureServiceConnection)"
+              scriptType: "bash"
+              scriptLocation: "inlineScript"
+              inlineScript: |
+                bash $(scriptsPath)/gov-validate-deployment.sh \
+                  "${{ parameters.managementGroupId }}" \
+                  "$(templateFile)" \
+                  "$(parametersFile)" \
+                  "$(deploymentLocation)" \
+                  "${{ parameters.environment }}" \
+                  "${{ parameters.location }}" \
+                  "${{ parameters.owner }}" \
+                  "${{ parameters.managedBy }}" \
+                  "${{ parameters.enableMCSB }}" \
+                  "${{ parameters.enableCanadaPBMM }}" \
+                  "${{ parameters.enforcementMode }}"
+
+  - stage: WhatIf
+    displayName: "What-If Analysis"
+    dependsOn:
+      - Validate
+    # Runs for: WhatIf, Deploy
+    condition: |
+      and(
+        eq(dependencies.Validate.result, 'Succeeded'),
+        in('${{ parameters.deploymentStage }}', 'WhatIf', 'Deploy')
+      )
+    jobs:
+      - job: WhatIfAnalysis
+        displayName: "What-If"
+        steps:
+          - checkout: self
+
+          - task: AzureCLI@2
+            displayName: "What-If Governance Deployment"
+            inputs:
+              azureSubscription: "$(azureServiceConnection)"
+              scriptType: "bash"
+              scriptLocation: "inlineScript"
+              inlineScript: |
+                bash $(scriptsPath)/gov-whatif-deployment.sh \
+                  "${{ parameters.managementGroupId }}" \
+                  "$(templateFile)" \
+                  "$(parametersFile)" \
+                  "$(deploymentLocation)" \
+                  "${{ parameters.environment }}" \
+                  "${{ parameters.location }}" \
+                  "${{ parameters.owner }}" \
+                  "${{ parameters.managedBy }}" \
+                  "${{ parameters.enableMCSB }}" \
+                  "${{ parameters.enableCanadaPBMM }}" \
+                  "${{ parameters.enforcementMode }}"
+
+  - stage: Deploy
+    displayName: "Deploy Governance Policies"
+    dependsOn:
+      - Validate
+      - WhatIf
+    # Runs for: Deploy only
+    condition: |
+      and(
+        eq(dependencies.Validate.result, 'Succeeded'),
+        in(dependencies.WhatIf.result, 'Succeeded', 'Skipped'),
+        eq('${{ parameters.deploymentStage }}', 'Deploy')
+      )
+    jobs:
+      - deployment: DeployGovernance
+        displayName: "Deploy Governance Policies"
+        environment: "${{ parameters.environment }}"
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - checkout: self
+
+                - task: AzureCLI@2
+                  displayName: "Deploy Governance Policies"
+                  inputs:
+                    azureSubscription: "$(azureServiceConnection)"
+                    scriptType: "bash"
+                    scriptLocation: "inlineScript"
+                    inlineScript: |
+                      bash $(scriptsPath)/gov-deploy.sh \
+                        "$(deploymentName)" \
+                        "${{ parameters.managementGroupId }}" \
+                        "$(templateFile)" \
+                        "$(parametersFile)" \
+                        "$(deploymentLocation)" \
+                        "${{ parameters.environment }}" \
+                        "${{ parameters.location }}" \
+                        "${{ parameters.owner }}" \
+                        "${{ parameters.managedBy }}" \
+                        "${{ parameters.enableMCSB }}" \
+                        "${{ parameters.enableCanadaPBMM }}" \
+                        "${{ parameters.enforcementMode }}"

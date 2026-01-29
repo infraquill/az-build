@@ -1,0 +1,274 @@
+# Azure Pipeline to deploy Monitoring Infrastructure using Deployment Stacks
+# This pipeline deploys the monitoring Bicep template as a Deployment Stack at subscription scope
+# Deploys centralized Log Analytics workspace, Action Groups, and Alert Rules
+#
+# Parameter Placement Strategy:
+# - Stable configuration (SKU, thresholds, security settings) is in bicepparam files
+# - String values that need organization-wide updates (subscription ID, emails, SMS) are in monitoring-variables
+# - Values that change per run (environment, location) are pipeline parameters
+#
+# Security Note:
+# Public network access controls data plane operations (log queries) only.
+# ARM API deployments work regardless of publicNetworkAccess setting.
+# Microsoft-hosted agents can deploy even with publicNetworkAccess='Disabled'.
+
+trigger: none
+pr: none
+
+pool:
+  vmImage: "ubuntu-latest"
+
+variables:
+  - group: common-variables
+  - group: monitoring-variables
+  - name: bicepPath
+    value: "code/bicep/monitoring"
+  - name: templateFile
+    value: "$(bicepPath)/monitoring.bicep"
+  - name: parametersFile
+    value: "$(bicepPath)/monitoring.bicepparam"
+  - name: scriptsPath
+    value: "code/pipelines/monitoring"
+  - name: stackName
+    value: "stack-${{ parameters.workloadAlias }}-${{ parameters.environment }}-${{ parameters.locationCode }}-${{ parameters.instanceNumber }}"
+
+parameters:
+  # ============================================================================
+  # CORE NAMING PARAMETERS (vary per deployment)
+  # ============================================================================
+  - name: projectName
+    displayName: "Project Name"
+    type: string
+    default: "landing-zone"
+  - name: workloadAlias
+    displayName: "Workload Alias"
+    type: string
+    default: "monitoring"
+  - name: environment
+    displayName: "Environment"
+    type: string
+    default: "live"
+    values:
+      - nonprod
+      - dev
+      - test
+      - uat
+      - staging
+      - prod
+      - live
+  - name: locationCode
+    displayName: "Location Code (e.g., cac for canada central)"
+    type: string
+    default: "cac"
+  - name: instanceNumber
+    displayName: "Instance Number (e.g., 001 for the first instance)"
+    type: string
+    default: "001"
+  - name: location
+    displayName: "Azure Region"
+    type: string
+    default: "canadacentral"
+
+  # ============================================================================
+  # WORKSPACE CONFIGURATION (may vary by environment)
+  # ============================================================================
+  - name: dataRetention
+    displayName: "Data Retention (days, 30-730)"
+    type: number
+    default: 60
+  - name: dailyQuotaGb
+    displayName: "Daily Quota (GB, -1 for unlimited)"
+    type: number
+    default: -1
+
+  # ============================================================================
+  # OWNERSHIP PARAMETERS
+  # ============================================================================
+  - name: managedBy
+    displayName: "Managed By"
+    type: string
+    default: "$(managedBy)"
+  - name: owner
+    displayName: "Owner (e.g. a group mailbox like platform-team@organization.com)"
+    type: string
+    default: "$(defaultOwner)"
+
+  # ============================================================================
+  # DEPLOYMENT STACK SETTINGS
+  # ============================================================================
+  - name: denySettingsMode
+    displayName: "Deny Settings Mode"
+    type: string
+    default: "denyWriteAndDelete"
+    values:
+      - none
+      - denyDelete
+      - denyWriteAndDelete
+  - name: actionOnUnmanage
+    displayName: "Action on Unmanaged Resources"
+    type: string
+    default: "detachAll"
+    values:
+      - deleteResources
+      - deleteAll
+      - detachAll
+  - name: deploymentStage
+    displayName: "Pipeline Stage to Run"
+    type: string
+    default: "Preview"
+    values:
+      - Validation
+      - Preview
+      - Deploy
+      - Remove
+
+stages:
+  - stage: Validate
+    displayName: "Validate Deployment Stack"
+    # Runs for: Validation, Preview, Deploy (all options)
+    jobs:
+      - template: ../templates/jobs/validate-environment-job.yaml
+        parameters:
+          environment: ${{ parameters.environment }}
+      - job: ValidateStack
+        displayName: "Validate Stack"
+        dependsOn: ValidateEnvironment
+        steps:
+          - checkout: self
+
+          - task: AzureCLI@2
+            displayName: "Validate Monitoring Deployment Stack"
+            inputs:
+              azureSubscription: "$(azureServiceConnection)"
+              scriptType: "bash"
+              scriptLocation: "inlineScript"
+              inlineScript: |
+                bash $(scriptsPath)/mon-validate-stack.sh \
+                  "$(monitoringSubscriptionId)" \
+                  "$(templateFile)" \
+                  "$(parametersFile)" \
+                  "$(deploymentLocation)" \
+                  "$(stackName)" \
+                  "${{ parameters.denySettingsMode }}" \
+                  "${{ parameters.actionOnUnmanage }}" \
+                  "${{ parameters.projectName }}" \
+                  "${{ parameters.workloadAlias }}" \
+                  "${{ parameters.environment }}" \
+                  "${{ parameters.locationCode }}" \
+                  "${{ parameters.instanceNumber }}" \
+                  "${{ parameters.location }}" \
+                  "${{ parameters.dataRetention }}" \
+                  "${{ parameters.dailyQuotaGb }}" \
+                  "${{ parameters.owner }}" \
+                  "${{ parameters.managedBy }}" \
+                  "$(actionGroupEmails)" \
+                  "$(actionGroupSmsNumbers)"
+
+  - stage: Preview
+    displayName: "Preview Stack State"
+    dependsOn:
+      - Validate
+    # Runs for: Preview, Deploy
+    condition: |
+      and(
+        eq(dependencies.Validate.result, 'Succeeded'),
+        in('${{ parameters.deploymentStage }}', 'Preview', 'Deploy')
+      )
+    jobs:
+      - job: PreviewStack
+        displayName: "Preview Stack"
+        steps:
+          - checkout: self
+
+          - task: AzureCLI@2
+            displayName: "Preview Stack State"
+            inputs:
+              azureSubscription: "$(azureServiceConnection)"
+              scriptType: "bash"
+              scriptLocation: "inlineScript"
+              inlineScript: |
+                bash $(scriptsPath)/mon-preview-stack.sh \
+                  "$(monitoringSubscriptionId)" \
+                  "$(stackName)"
+
+  - stage: Deploy
+    displayName: "Deploy Monitoring Deployment Stack"
+    dependsOn:
+      - Validate
+      - Preview
+    # Runs for: Deploy only
+    condition: |
+      and(
+        eq(dependencies.Validate.result, 'Succeeded'),
+        in(dependencies.Preview.result, 'Succeeded', 'Skipped'),
+        eq('${{ parameters.deploymentStage }}', 'Deploy')
+      )
+    jobs:
+      - deployment: DeployMonitoringStack
+        displayName: "Deploy Monitoring Stack"
+        environment: "${{ parameters.environment }}"
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - checkout: self
+
+                - task: AzureCLI@2
+                  displayName: "Deploy Monitoring Deployment Stack"
+                  inputs:
+                    azureSubscription: "$(azureServiceConnection)"
+                    scriptType: "bash"
+                    scriptLocation: "inlineScript"
+                    inlineScript: |
+                      bash $(scriptsPath)/mon-deploy-stack.sh \
+                        "$(monitoringSubscriptionId)" \
+                        "$(templateFile)" \
+                        "$(parametersFile)" \
+                        "$(deploymentLocation)" \
+                        "$(stackName)" \
+                        "${{ parameters.denySettingsMode }}" \
+                        "${{ parameters.actionOnUnmanage }}" \
+                        "${{ parameters.projectName }}" \
+                        "${{ parameters.workloadAlias }}" \
+                        "${{ parameters.environment }}" \
+                        "${{ parameters.locationCode }}" \
+                        "${{ parameters.instanceNumber }}" \
+                        "${{ parameters.location }}" \
+                        "${{ parameters.dataRetention }}" \
+                        "${{ parameters.dailyQuotaGb }}" \
+                        "${{ parameters.owner }}" \
+                        "${{ parameters.managedBy }}" \
+                        "$(actionGroupEmails)" \
+                        "$(actionGroupSmsNumbers)"
+
+  - stage: Remove
+    displayName: "Remove Monitoring Deployment Stack"
+    dependsOn:
+      - Validate
+    # Runs for: Remove only
+    condition: |
+      and(
+        eq(dependencies.Validate.result, 'Succeeded'),
+        eq('${{ parameters.deploymentStage }}', 'Remove')
+      )
+    jobs:
+      - deployment: RemoveMonitoringStack
+        displayName: "Remove Monitoring Stack"
+        environment: "${{ parameters.environment }}"
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - checkout: self
+
+                - task: AzureCLI@2
+                  displayName: "Delete Monitoring Deployment Stack"
+                  inputs:
+                    azureSubscription: "$(azureServiceConnection)"
+                    scriptType: "bash"
+                    scriptLocation: "inlineScript"
+                    inlineScript: |
+                      bash $(scriptsPath)/mon-delete-stack.sh \
+                        "$(monitoringSubscriptionId)" \
+                        "$(stackName)" \
+                        "${{ parameters.actionOnUnmanage }}"
