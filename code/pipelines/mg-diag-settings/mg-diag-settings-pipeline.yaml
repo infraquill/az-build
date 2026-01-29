@@ -99,7 +99,7 @@ parameters:
   - name: denySettingsMode
     displayName: "Deny Settings Mode"
     type: string
-    default: "denyWriteAndDelete"
+    default: "none"
     values:
       - none
       - denyDelete
