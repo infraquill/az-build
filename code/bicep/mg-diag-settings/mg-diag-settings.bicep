@@ -17,7 +17,7 @@ param location string = 'canadacentral'
 
 @description('Prefix used for the management group hierarchy.')
 @minLength(2)
-@maxLength(10)
+@maxLength(36)
 param topLevelManagementGroupId string = 'alz'
 
 @description('Optional suffix for the management group hierarchy. This suffix will be appended to management group names/IDs. Include a preceding dash if required. Example: -suffix')
