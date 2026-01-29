@@ -68,15 +68,15 @@ param landingZoneMgConfidentialEnable bool = false
 var mgIds = {
   intRoot: topLevelManagementGroupId
   platform: '${childManagementGroupPrefix}-platform'
-  landingZones: '${childManagementGroupPrefix}-landingzones'
+  landingZones: '${childManagementGroupPrefix}-landing-zone'
   decommissioned: '${childManagementGroupPrefix}-decommissioned'
   sandbox: '${childManagementGroupPrefix}-sandbox'
 }
 
 // Used if landingZoneMgAlzDefaultsEnable == true
 var landingZoneMgChildrenAlzDefault = {
-  landingZonesCorp: '${childManagementGroupPrefix}-landingzones-corp'
-  landingZonesOnline: '${childManagementGroupPrefix}-landingzones-online'
+  landingZonesCorp: '${childManagementGroupPrefix}-landing-zone-corp'
+  landingZonesOnline: '${childManagementGroupPrefix}-landing-zone-online'
 }
 
 // Used if platformMgAlzDefaultsEnable == true
@@ -89,14 +89,14 @@ var platformMgChildrenAlzDefault = {
 
 // Used if landingZoneMgConfidentialEnable == true
 var landingZoneMgChildrenConfidential = {
-  landingZonesConfidentialCorp: '${childManagementGroupPrefix}-landingzones-confidential-corp'
-  landingZonesConfidentialOnline: '${childManagementGroupPrefix}-landingzones-confidential-online'
+  landingZonesConfidentialCorp: '${childManagementGroupPrefix}-landing-zone-confidential-corp'
+  landingZonesConfidentialOnline: '${childManagementGroupPrefix}-landing-zone-confidential-online'
 }
 
 // Used if landingZoneMgConfidentialEnable not empty
 var landingZoneMgCustomChildren = [
   for customMg in landingZoneMgChildren: {
-    mgId: '${childManagementGroupPrefix}-landingzones-${customMg}'
+    mgId: '${childManagementGroupPrefix}-landing-zone-${customMg}'
   }
 ]
 
