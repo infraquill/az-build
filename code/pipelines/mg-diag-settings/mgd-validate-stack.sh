@@ -14,8 +14,8 @@
 #     <stackName> \
 #     <denySettingsMode> \
 #     <actionOnUnmanage> \
-#     <topLevelManagementGroupPrefix> \
-#     <topLevelManagementGroupSuffix> \
+#     <topLevelManagementGroupId> \
+#     <childManagementGroupPrefix> \
 #     <logAnalyticsWorkspaceResourceId>
 #
 
@@ -28,16 +28,16 @@ DEPLOYMENT_LOCATION="${4:-}"
 STACK_NAME="${5:-}"
 DENY_SETTINGS_MODE="${6:-}"
 ACTION_ON_UNMANAGE="${7:-}"
-TOP_LEVEL_PREFIX="${8:-}"
-TOP_LEVEL_SUFFIX="${9:-}"
+TOP_LEVEL_ID="${8:-}"
+CHILD_PREFIX="${9:-}"
 LAW_RESOURCE_ID="${10:-}"
 
 PARAMS=""
-if [ -n "$TOP_LEVEL_PREFIX" ]; then
-    PARAMS="$PARAMS --parameters topLevelManagementGroupPrefix=$TOP_LEVEL_PREFIX"
+if [ -n "$TOP_LEVEL_ID" ]; then
+    PARAMS="$PARAMS --parameters topLevelManagementGroupId=$TOP_LEVEL_ID"
 fi
-if [ -n "$TOP_LEVEL_SUFFIX" ]; then
-    PARAMS="$PARAMS --parameters topLevelManagementGroupSuffix=$TOP_LEVEL_SUFFIX"
+if [ -n "$CHILD_PREFIX" ]; then
+    PARAMS="$PARAMS --parameters childManagementGroupPrefix=$CHILD_PREFIX"
 fi
 if [ -n "$LAW_RESOURCE_ID" ]; then
     PARAMS="$PARAMS --parameters logAnalyticsWorkspaceResourceId=$LAW_RESOURCE_ID"
