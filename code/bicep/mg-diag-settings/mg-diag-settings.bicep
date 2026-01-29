@@ -15,13 +15,13 @@ targetScope = 'managementGroup'
 #disable-next-line no-unused-params
 param location string = 'canadacentral'
 
-@description('Prefix used for the management group hierarchy.')
+@description('Management Group ID for the top level management group.')
 @minLength(2)
 @maxLength(36)
 param topLevelManagementGroupId string = 'alz'
 
-@description('Optional suffix for the management group hierarchy. This suffix will be appended to management group names/IDs. Include a preceding dash if required. Example: -suffix')
-@maxLength(10)
+@description('Prefix for child management groups.')
+@maxLength(36)
 param childManagementGroupPrefix string = 'mg'
 
 // ============================================================================
