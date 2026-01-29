@@ -12,10 +12,10 @@ using './mg-diag-settings.bicep'
 // ============================================================================
 
 // Prefix used for the management group hierarchy (e.g. 'alz')
-param parTopLevelManagementGroupPrefix = 'alz'
+param topLevelManagementGroupPrefix = 'alz'
 
 // Optional suffix for the management group hierarchy
-param parTopLevelManagementGroupSuffix = ''
+param topLevelManagementGroupSuffix = ''
 
 // ============================================================================
 // MANAGEMENT GROUP CHILDREN CONFIGURATION
@@ -23,10 +23,10 @@ param parTopLevelManagementGroupSuffix = ''
 // ============================================================================
 
 // Array of strings to allow additional or different child Management Groups of the Landing Zones Management Group
-param parLandingZoneMgChildren = []
+param landingZoneMgChildren = []
 
 // Array of strings to allow additional or different child Management Groups of the Platform Management Group
-param parPlatformMgChildren = []
+param platformMgChildren = []
 
 // ============================================================================
 // DIAGNOSTIC DESTINATION CONFIGURATION
@@ -34,10 +34,10 @@ param parPlatformMgChildren = []
 
 // Log Analytics Workspace Resource ID where metrics/logs will be sent
 // Note: This should be supplied at deployment time if dynamic
-param parLogAnalyticsWorkspaceResourceId = ''
+param logAnalyticsWorkspaceResourceId = ''
 
 // Name of the Diagnostic Setting resource
-param parDiagnosticSettingsName = 'toLa'
+param diagnosticSettingsName = 'toLa'
 
 // ============================================================================
 // DEPLOYMENT SCOPE TOGGLES
@@ -45,17 +45,17 @@ param parDiagnosticSettingsName = 'toLa'
 // ============================================================================
 
 // Deploys Diagnostic Settings on Corp & Online Management Groups beneath Landing Zones Management Group
-param parLandingZoneMgAlzDefaultsEnable = true
+param landingZoneMgAlzDefaultsEnable = true
 
 // Deploys Diagnostic Settings on Management, Security, Connectivity and Identity Management Groups beneath Platform Management Group
-param parPlatformMgAlzDefaultsEnable = true
+param platformMgAlzDefaultsEnable = true
 
 // Deploys Diagnostic Settings on Confidential Corp & Confidential Online Management Groups beneath Landing Zones Management Group
-param parLandingZoneMgConfidentialEnable = false
+param landingZoneMgConfidentialEnable = false
 
 // ============================================================================
 // TELEMETRY
 // ============================================================================
 
 // Set to true to Opt-out of deployment telemetry
-param parTelemetryOptOut = false
+param telemetryOptOut = false

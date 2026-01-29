@@ -34,13 +34,13 @@ LAW_RESOURCE_ID="${10:-}"
 
 PARAMS=""
 if [ -n "$TOP_LEVEL_PREFIX" ]; then
-    PARAMS="$PARAMS --parameters parTopLevelManagementGroupPrefix=$TOP_LEVEL_PREFIX"
+    PARAMS="$PARAMS --parameters topLevelManagementGroupPrefix=$TOP_LEVEL_PREFIX"
 fi
 if [ -n "$TOP_LEVEL_SUFFIX" ]; then
-    PARAMS="$PARAMS --parameters parTopLevelManagementGroupSuffix=$TOP_LEVEL_SUFFIX"
+    PARAMS="$PARAMS --parameters topLevelManagementGroupSuffix=$TOP_LEVEL_SUFFIX"
 fi
 if [ -n "$LAW_RESOURCE_ID" ]; then
-    PARAMS="$PARAMS --parameters parLogAnalyticsWorkspaceResourceId=$LAW_RESOURCE_ID"
+    PARAMS="$PARAMS --parameters logAnalyticsWorkspaceResourceId=$LAW_RESOURCE_ID"
 fi
 
 az stack mg validate \
