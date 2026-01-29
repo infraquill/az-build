@@ -115,11 +115,11 @@ parameters:
   - name: topLevelManagementGroupId
     displayName: "Top Level Management Group ID"
     type: string
-    default: "contoso"
+    default: ""
   - name: childManagementGroupPrefix
     displayName: "Child Management Group Prefix"
     type: string
-    default: "mg"
+    default: ""
 
 stages:
   - stage: Validate
