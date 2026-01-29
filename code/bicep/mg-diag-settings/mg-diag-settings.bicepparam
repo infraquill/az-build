@@ -11,11 +11,14 @@ using './mg-diag-settings.bicep'
 // HIERARCHY CONFIGURATION
 // ============================================================================
 
-// Prefix used for the management group hierarchy (e.g. 'alz')
-param topLevelManagementGroupPrefix = 'alz'
+// Location for the deployment metadata
+param location = 'canadacentral'
 
-// Optional suffix for the management group hierarchy
-param topLevelManagementGroupSuffix = ''
+// Management Group ID for the top level management group
+param topLevelManagementGroupId = 'contoso'
+
+// Prefix for child management groups (e.g. 'mg')
+param childManagementGroupPrefix = 'mg'
 
 // ============================================================================
 // MANAGEMENT GROUP CHILDREN CONFIGURATION

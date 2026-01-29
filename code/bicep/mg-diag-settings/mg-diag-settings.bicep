@@ -11,14 +11,18 @@ targetScope = 'managementGroup'
 // HIERARCHY PARAMETERS
 // ============================================================================
 
+@description('Location for the deployment metadata.')
+#disable-next-line no-unused-params
+param location string = 'canadacentral'
+
 @description('Prefix used for the management group hierarchy.')
 @minLength(2)
 @maxLength(10)
-param topLevelManagementGroupPrefix string = 'alz'
+param topLevelManagementGroupId string = 'alz'
 
 @description('Optional suffix for the management group hierarchy. This suffix will be appended to management group names/IDs. Include a preceding dash if required. Example: -suffix')
 @maxLength(10)
-param topLevelManagementGroupSuffix string = ''
+param childManagementGroupPrefix string = 'mg'
 
 // ============================================================================
 // CUSTOM CHILDREN PARAMETERS
@@ -62,44 +66,44 @@ param landingZoneMgConfidentialEnable bool = false
 // ============================================================================
 
 var mgIds = {
-  intRoot: '${topLevelManagementGroupPrefix}${topLevelManagementGroupSuffix}'
-  platform: '${topLevelManagementGroupPrefix}-platform${topLevelManagementGroupSuffix}'
-  landingZones: '${topLevelManagementGroupPrefix}-landingzones${topLevelManagementGroupSuffix}'
-  decommissioned: '${topLevelManagementGroupPrefix}-decommissioned${topLevelManagementGroupSuffix}'
-  sandbox: '${topLevelManagementGroupPrefix}-sandbox${topLevelManagementGroupSuffix}'
+  intRoot: topLevelManagementGroupId
+  platform: '${childManagementGroupPrefix}-platform'
+  landingZones: '${childManagementGroupPrefix}-landingzones'
+  decommissioned: '${childManagementGroupPrefix}-decommissioned'
+  sandbox: '${childManagementGroupPrefix}-sandbox'
 }
 
 // Used if landingZoneMgAlzDefaultsEnable == true
 var landingZoneMgChildrenAlzDefault = {
-  landingZonesCorp: '${topLevelManagementGroupPrefix}-landingzones-corp${topLevelManagementGroupSuffix}'
-  landingZonesOnline: '${topLevelManagementGroupPrefix}-landingzones-online${topLevelManagementGroupSuffix}'
+  landingZonesCorp: '${childManagementGroupPrefix}-landingzones-corp'
+  landingZonesOnline: '${childManagementGroupPrefix}-landingzones-online'
 }
 
 // Used if platformMgAlzDefaultsEnable == true
 var platformMgChildrenAlzDefault = {
-  platformManagement: '${topLevelManagementGroupPrefix}-platform-management${topLevelManagementGroupSuffix}'
-  platformSecurity: '${topLevelManagementGroupPrefix}-platform-security${topLevelManagementGroupSuffix}'
-  platformConnectivity: '${topLevelManagementGroupPrefix}-platform-connectivity${topLevelManagementGroupSuffix}'
-  platformIdentity: '${topLevelManagementGroupPrefix}-platform-identity${topLevelManagementGroupSuffix}'
+  platformManagement: '${childManagementGroupPrefix}-platform-management'
+  platformSecurity: '${childManagementGroupPrefix}-platform-security'
+  platformConnectivity: '${childManagementGroupPrefix}-platform-connectivity'
+  platformIdentity: '${childManagementGroupPrefix}-platform-identity'
 }
 
 // Used if landingZoneMgConfidentialEnable == true
 var landingZoneMgChildrenConfidential = {
-  landingZonesConfidentialCorp: '${topLevelManagementGroupPrefix}-landingzones-confidential-corp${topLevelManagementGroupSuffix}'
-  landingZonesConfidentialOnline: '${topLevelManagementGroupPrefix}-landingzones-confidential-online${topLevelManagementGroupSuffix}'
+  landingZonesConfidentialCorp: '${childManagementGroupPrefix}-landingzones-confidential-corp'
+  landingZonesConfidentialOnline: '${childManagementGroupPrefix}-landingzones-confidential-online'
 }
 
 // Used if landingZoneMgConfidentialEnable not empty
 var landingZoneMgCustomChildren = [
   for customMg in landingZoneMgChildren: {
-    mgId: '${topLevelManagementGroupPrefix}-landingzones-${customMg}${topLevelManagementGroupSuffix}'
+    mgId: '${childManagementGroupPrefix}-landingzones-${customMg}'
   }
 ]
 
 // Used if landingZoneMgConfidentialEnable not empty
 var platformMgCustomChildren = [
   for customMg in platformMgChildren: {
-    mgId: '${topLevelManagementGroupPrefix}-platform-${customMg}${topLevelManagementGroupSuffix}'
+    mgId: '${childManagementGroupPrefix}-platform-${customMg}'
   }
 ]
 
