@@ -57,9 +57,6 @@ param landingZoneMgConfidentialEnable bool = false
 // TELEMETRY
 // ============================================================================
 
-@description('Set Parameter to true to Opt-out of deployment telemetry.')
-param telemetryOptOut bool = false
-
 // ============================================================================
 // COMPUTED VARIABLES
 // ============================================================================
@@ -93,147 +90,174 @@ var landingZoneMgChildrenConfidential = {
 }
 
 // Used if landingZoneMgConfidentialEnable not empty
-var landingZoneMgCustomChildren = [for customMg in landingZoneMgChildren: {
-  mgId: '${topLevelManagementGroupPrefix}-landingzones-${customMg}${topLevelManagementGroupSuffix}'
-}]
+var landingZoneMgCustomChildren = [
+  for customMg in landingZoneMgChildren: {
+    mgId: '${topLevelManagementGroupPrefix}-landingzones-${customMg}${topLevelManagementGroupSuffix}'
+  }
+]
 
 // Used if landingZoneMgConfidentialEnable not empty
-var platformMgCustomChildren = [for customMg in platformMgChildren: {
-  mgId: '${topLevelManagementGroupPrefix}-platform-${customMg}${topLevelManagementGroupSuffix}'
-}]
+var platformMgCustomChildren = [
+  for customMg in platformMgChildren: {
+    mgId: '${topLevelManagementGroupPrefix}-platform-${customMg}${topLevelManagementGroupSuffix}'
+  }
+]
 
 // Build final object based on input parameters for default and confidential child MGs of LZs
-var landingZoneMgDefaultChildrenUnioned = (landingZoneMgAlzDefaultsEnable && landingZoneMgConfidentialEnable) ? union(landingZoneMgChildrenAlzDefault, landingZoneMgChildrenConfidential) : (landingZoneMgAlzDefaultsEnable && !landingZoneMgConfidentialEnable) ? landingZoneMgChildrenAlzDefault : (!landingZoneMgAlzDefaultsEnable && landingZoneMgConfidentialEnable) ? landingZoneMgChildrenConfidential : (!landingZoneMgAlzDefaultsEnable && !landingZoneMgConfidentialEnable) ? {} : {}
+var landingZoneMgDefaultChildrenUnioned = landingZoneMgAlzDefaultsEnable
+  ? (landingZoneMgConfidentialEnable
+      ? union(landingZoneMgChildrenAlzDefault, landingZoneMgChildrenConfidential)
+      : landingZoneMgChildrenAlzDefault)
+  : (landingZoneMgConfidentialEnable ? landingZoneMgChildrenConfidential : {})
 
 // Build final object based on input parameters for default child MGs of Platform LZs
-var platformMgDefaultChildrenUnioned = (platformMgAlzDefaultsEnable) ? platformMgChildrenAlzDefault : (platformMgAlzDefaultsEnable) ? platformMgChildrenAlzDefault : (!platformMgAlzDefaultsEnable) ? {} : (!platformMgAlzDefaultsEnable) ? {} : {}
-
-// Customer Usage Attribution Id
-var cuaid = 'f49c8dfb-c0ce-4ee0-b316-5e4844474dd0'
+var platformMgDefaultChildrenUnioned = platformMgAlzDefaultsEnable ? platformMgChildrenAlzDefault : {}
 
 // ============================================================================
 // RESOURCE DEPLOYMENTS
 // ============================================================================
 
 // 1. Root & Core Management Groups
-resource mgScope_root 'Microsoft.Management/managementGroups@2021-04-01' existing = [for item in items(mgIds): {
-  name: item.value
-}]
-
-resource diag_root 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = [for (item, i) in items(mgIds): {
-  scope: mgScope_root[i]
-  name: diagnosticSettingsName
-  properties: {
-    workspaceId: logAnalyticsWorkspaceResourceId
-    logs: [
-      {
-        category: 'Administrative'
-        enabled: true
-      }
-      {
-        category: 'Policy'
-        enabled: true
-      }
-    ]
+resource mgScope_root 'Microsoft.Management/managementGroups@2021-04-01' existing = [
+  for item in items(mgIds): {
+    scope: tenant()
+    name: item.value
   }
-}]
+]
+
+module diag_root 'modules/diagnostic-setting.bicep' = [
+  for (item, i) in items(mgIds): {
+    scope: mgScope_root[i]
+    name: 'deploy-diag-root-${item.key}'
+    params: {
+      diagnosticSettingsName: diagnosticSettingsName
+      logAnalyticsWorkspaceResourceId: logAnalyticsWorkspaceResourceId
+      logs: [
+        {
+          category: 'Administrative'
+          enabled: true
+        }
+        {
+          category: 'Policy'
+          enabled: true
+        }
+      ]
+    }
+  }
+]
 
 // 2. Default Children Landing Zone Management Groups
-resource mgScope_lz 'Microsoft.Management/managementGroups@2021-04-01' existing = [for item in items(landingZoneMgDefaultChildrenUnioned): {
-  name: item.value
-}]
-
-resource diag_lz 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = [for (item, i) in items(landingZoneMgDefaultChildrenUnioned): {
-  scope: mgScope_lz[i]
-  name: diagnosticSettingsName
-  properties: {
-    workspaceId: logAnalyticsWorkspaceResourceId
-    logs: [
-      {
-        category: 'Administrative'
-        enabled: true
-      }
-      {
-        category: 'Policy'
-        enabled: true
-      }
-    ]
+resource mgScope_lz 'Microsoft.Management/managementGroups@2021-04-01' existing = [
+  for item in items(landingZoneMgDefaultChildrenUnioned): {
+    scope: tenant()
+    name: item.value
   }
-}]
+]
+
+module diag_lz 'modules/diagnostic-setting.bicep' = [
+  for (item, i) in items(landingZoneMgDefaultChildrenUnioned): {
+    scope: mgScope_lz[i]
+    name: 'deploy-diag-lz-${item.key}'
+    params: {
+      diagnosticSettingsName: diagnosticSettingsName
+      logAnalyticsWorkspaceResourceId: logAnalyticsWorkspaceResourceId
+      logs: [
+        {
+          category: 'Administrative'
+          enabled: true
+        }
+        {
+          category: 'Policy'
+          enabled: true
+        }
+      ]
+    }
+  }
+]
 
 // 3. Default Children Platform Management Groups
-resource mgScope_platform 'Microsoft.Management/managementGroups@2021-04-01' existing = [for item in items(platformMgDefaultChildrenUnioned): {
-  name: item.value
-}]
-
-resource diag_platform 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = [for (item, i) in items(platformMgDefaultChildrenUnioned): {
-  scope: mgScope_platform[i]
-  name: diagnosticSettingsName
-  properties: {
-    workspaceId: logAnalyticsWorkspaceResourceId
-    logs: [
-      {
-        category: 'Administrative'
-        enabled: true
-      }
-      {
-        category: 'Policy'
-        enabled: true
-      }
-    ]
+resource mgScope_platform 'Microsoft.Management/managementGroups@2021-04-01' existing = [
+  for item in items(platformMgDefaultChildrenUnioned): {
+    scope: tenant()
+    name: item.value
   }
-}]
+]
+
+module diag_platform 'modules/diagnostic-setting.bicep' = [
+  for (item, i) in items(platformMgDefaultChildrenUnioned): {
+    scope: mgScope_platform[i]
+    name: 'deploy-diag-platform-${item.key}'
+    params: {
+      diagnosticSettingsName: diagnosticSettingsName
+      logAnalyticsWorkspaceResourceId: logAnalyticsWorkspaceResourceId
+      logs: [
+        {
+          category: 'Administrative'
+          enabled: true
+        }
+        {
+          category: 'Policy'
+          enabled: true
+        }
+      ]
+    }
+  }
+]
 
 // 4. Custom Children Landing Zone Management Groups
-resource mgScope_customLz 'Microsoft.Management/managementGroups@2021-04-01' existing = [for item in landingZoneMgCustomChildren: {
-  name: item.mgId
-}]
-
-resource diag_customLz 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = [for (item, i) in landingZoneMgCustomChildren: {
-  scope: mgScope_customLz[i]
-  name: diagnosticSettingsName
-  properties: {
-    workspaceId: logAnalyticsWorkspaceResourceId
-    logs: [
-      {
-        category: 'Administrative'
-        enabled: true
-      }
-      {
-        category: 'Policy'
-        enabled: true
-      }
-    ]
+resource mgScope_customLz 'Microsoft.Management/managementGroups@2021-04-01' existing = [
+  for item in landingZoneMgCustomChildren: {
+    scope: tenant()
+    name: item.mgId
   }
-}]
+]
+
+module diag_customLz 'modules/diagnostic-setting.bicep' = [
+  for (item, i) in landingZoneMgCustomChildren: {
+    scope: mgScope_customLz[i]
+    name: 'deploy-diag-customLz-${i}'
+    params: {
+      diagnosticSettingsName: diagnosticSettingsName
+      logAnalyticsWorkspaceResourceId: logAnalyticsWorkspaceResourceId
+      logs: [
+        {
+          category: 'Administrative'
+          enabled: true
+        }
+        {
+          category: 'Policy'
+          enabled: true
+        }
+      ]
+    }
+  }
+]
 
 // 5. Custom Children Platform Management Groups
-resource mgScope_customPlatform 'Microsoft.Management/managementGroups@2021-04-01' existing = [for item in platformMgCustomChildren: {
-  name: item.mgId
-}]
-
-resource diag_customPlatform 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = [for (item, i) in platformMgCustomChildren: {
-  scope: mgScope_customPlatform[i]
-  name: diagnosticSettingsName
-  properties: {
-    workspaceId: logAnalyticsWorkspaceResourceId
-    logs: [
-      {
-        category: 'Administrative'
-        enabled: true
-      }
-      {
-        category: 'Policy'
-        enabled: true
-      }
-    ]
+resource mgScope_customPlatform 'Microsoft.Management/managementGroups@2021-04-01' existing = [
+  for item in platformMgCustomChildren: {
+    scope: tenant()
+    name: item.mgId
   }
-}]
+]
 
-// Optional Deployment for Customer Usage Attribution
-// module modCustomerUsageAttribution '../CRML/customerUsageAttribution/cuaIdManagementGroup.bicep' = if (!telemetryOptOut) {
-//   #disable-next-line no-loc-expr-outside-params
-//   name: 'pid-${cuaid}-${uniqueString(deployment().location)}'
-//   scope: managementGroup()
-//   params: {}
-// }
+module diag_customPlatform 'modules/diagnostic-setting.bicep' = [
+  for (item, i) in platformMgCustomChildren: {
+    scope: mgScope_customPlatform[i]
+    name: 'deploy-diag-customPlatform-${i}'
+    params: {
+      diagnosticSettingsName: diagnosticSettingsName
+      logAnalyticsWorkspaceResourceId: logAnalyticsWorkspaceResourceId
+      logs: [
+        {
+          category: 'Administrative'
+          enabled: true
+        }
+        {
+          category: 'Policy'
+          enabled: true
+        }
+      ]
+    }
+  }
+]

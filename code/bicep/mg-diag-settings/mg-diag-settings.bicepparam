@@ -34,7 +34,7 @@ param platformMgChildren = []
 
 // Log Analytics Workspace Resource ID where metrics/logs will be sent
 // Note: This should be supplied at deployment time if dynamic
-param logAnalyticsWorkspaceResourceId = ''
+param logAnalyticsWorkspaceResourceId = '/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/placeholder-rg/providers/Microsoft.OperationalInsights/workspaces/placeholder-workspace'
 
 // Name of the Diagnostic Setting resource
 param diagnosticSettingsName = 'toLa'
@@ -56,6 +56,3 @@ param landingZoneMgConfidentialEnable = false
 // ============================================================================
 // TELEMETRY
 // ============================================================================
-
-// Set to true to Opt-out of deployment telemetry
-param telemetryOptOut = false
