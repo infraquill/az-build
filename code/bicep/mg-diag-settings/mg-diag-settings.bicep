@@ -18,7 +18,7 @@ param location string = 'canadacentral'
 @description('Management Group ID for the top level management group.')
 @minLength(2)
 @maxLength(36)
-param topLevelManagementGroupId string = 'alz'
+param topLevelManagementGroupId string
 
 @description('Prefix for child management groups.')
 @maxLength(36)
