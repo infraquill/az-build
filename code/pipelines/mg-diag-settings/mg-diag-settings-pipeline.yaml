@@ -54,7 +54,7 @@ variables:
   - name: parametersFile
     value: "$(bicepPath)/mg-diag-settings.bicepparam"
   - name: managementGroupId
-    value: 'alz' # Default MG ID
+    value: '${{ parameters.topLevelManagementGroupId }}' # Uses the parameter value
   - name: stackName
     value: "stack-${{ parameters.workloadAlias }}-${{ parameters.environment }}-${{ parameters.locationCode }}-${{ parameters.instanceNumber }}"
 
@@ -112,6 +112,14 @@ parameters:
       - deleteResources
       - deleteAll
       - detachAll
+  - name: topLevelManagementGroupId
+    displayName: "Top Level Management Group ID"
+    type: string
+    default: "contoso"
+  - name: childManagementGroupPrefix
+    displayName: "Child Management Group Prefix"
+    type: string
+    default: "mg"
 
 stages:
   - stage: Validate
@@ -139,8 +147,8 @@ stages:
                   "$(stackName)" \
                   "${{ parameters.denySettingsMode }}" \
                   "${{ parameters.actionOnUnmanage }}" \
-                  "alz" \
-                  "" \
+                  "${{ parameters.topLevelManagementGroupId }}" \
+                  "${{ parameters.childManagementGroupPrefix }}" \
                   ""
 
   - stage: Preview
@@ -202,8 +210,8 @@ stages:
                         "$(stackName)" \
                         "${{ parameters.denySettingsMode }}" \
                         "${{ parameters.actionOnUnmanage }}" \
-                        "alz" \
-                        "" \
+                        "${{ parameters.topLevelManagementGroupId }}" \
+                        "${{ parameters.childManagementGroupPrefix }}" \
                         ""
 
   - stage: Remove
