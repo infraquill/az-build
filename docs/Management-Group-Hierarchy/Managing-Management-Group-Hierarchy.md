@@ -213,6 +213,22 @@ To update properties of existing management groups:
 - **Validate Parameters**: Ensure all IDs are correct and parents exist
 - **Check Permissions**: Verify service principal has required permissions
 
+### Diagnostic Settings Show Disabled in Portal
+
+Management group diagnostic settings can appear as **Disabled** in the Azure Portal even when they are correctly configured. The portal does not reliably display management group diagnostic settings status.
+
+**How to Validate** (authoritative):
+Use a REST API GET call against the management group scope and confirm `Administrative` and `Policy` logs are `enabled: true`.
+
+```bash
+az rest --method get \
+  --url "https://management.azure.com/providers/Microsoft.Management/managementGroups/<mg-id>/providers/Microsoft.Insights/diagnosticSettings?api-version=2021-05-01-preview"
+```
+
+**Notes**:
+- There is currently no direct validation for management group diagnostic settings in the Azure Portal, `az monitor`, or PowerShell.
+- If the REST response shows `enabled: true` for the expected categories, the settings are active even if the portal shows **Disabled**.
+
 ## Related Documentation
 
 - [Management Group Hierarchy Overview](Management-Group-Hierarchy-Overview.md)
