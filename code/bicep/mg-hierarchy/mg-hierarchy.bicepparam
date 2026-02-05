@@ -28,8 +28,8 @@ param managementGroups = [
     parentId: 'mg-${orgName}'
   }
   {
-    id: 'mg-landing-zone'
-    displayName: 'Landing Zone'
+    id: 'mg-landing-zones'
+    displayName: 'Landing Zones'
     parentId: 'mg-${orgName}'
   }
   {
@@ -42,6 +42,12 @@ param managementGroups = [
     displayName: 'Decommissioned'
     parentId: 'mg-${orgName}'
   }
+  // Platform Children
+  {
+    id: 'mg-identity'
+    displayName: 'Identity'
+    parentId: 'mg-platform'
+  }
   {
     id: 'mg-management'
     displayName: 'Management'
@@ -52,24 +58,37 @@ param managementGroups = [
     displayName: 'Connectivity'
     parentId: 'mg-platform'
   }
+  // Landing Zone Containers
+  {
+    id: 'mg-corp'
+    displayName: 'Corp'
+    parentId: 'mg-landing-zones'
+  }
+  {
+    id: 'mg-online'
+    displayName: 'Online'
+    parentId: 'mg-landing-zones'
+  }
+  // Corp Environments (Regulated Split)
   {
     id: 'mg-corp-prod'
     displayName: 'Corp Production'
-    parentId: 'mg-landing-zone'
+    parentId: 'mg-corp'
   }
   {
     id: 'mg-corp-non-prod'
     displayName: 'Corp Non-Production'
-    parentId: 'mg-landing-zone'
+    parentId: 'mg-corp'
   }
+  // Online Environments (Regulated Split)
   {
     id: 'mg-online-prod'
     displayName: 'Online Production'
-    parentId: 'mg-landing-zone'
+    parentId: 'mg-online'
   }
   {
     id: 'mg-online-non-prod'
     displayName: 'Online Non-Production'
-    parentId: 'mg-landing-zone'
+    parentId: 'mg-online'
   }
 ]

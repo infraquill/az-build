@@ -131,7 +131,7 @@ export DEFAULT_ACTION_ON_UNMANAGE="detachAll"
 # Subscription Names (used by lib.sh)
 # =============================================================================
 # These names are used to look up subscription IDs dynamically
-# Use your actual subscription names (e.g., "subcr-mngmnt-live-cac-001")
+# Use your actual subscription names (e.g., "subcr-mngmnt-live-cac-01")
 export MANAGEMENT_SUBSCRIPTION_NAME=""
 export CONNECTIVITY_SUBSCRIPTION_NAME=""
 

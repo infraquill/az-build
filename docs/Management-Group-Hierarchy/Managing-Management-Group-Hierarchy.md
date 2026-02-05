@@ -84,8 +84,8 @@ To update properties of existing management groups:
 ### 1. Naming Conventions
 
 - **IDs**: Use lowercase, alphanumeric characters with hyphens
-  - Good: `corp-prod`, `platform-mgmt`
-  - Bad: `Corp Prod`, `platform_mgmt_01`
+  - Good: `mg-corp`, `mg-platform`
+  - Bad: `Corp`, `platform_mgmt_01`
 
 - **Display Names**: Use clear, descriptive names
   - Good: `Corporate Production`, `Platform Management`
@@ -128,9 +128,9 @@ To update properties of existing management groups:
 **Solution**:
 ```bicep
 {
-  id: 'dev'
+  id: 'mg-dev'
   displayName: 'Development'
-  parentId: 'landing-zone'
+  parentId: 'mg-landing-zones'
 }
 ```
 
@@ -141,9 +141,9 @@ To update properties of existing management groups:
 **Solution**:
 ```bicep
 {
-  id: 'sandbox'
+  id: 'mg-sandbox'
   displayName: 'Sandbox'
-  parentId: 'platform'  // Changed from 'org-name'
+  parentId: 'mg-platform'  // Changed from 'mg-org'
 }
 ```
 
@@ -156,9 +156,9 @@ To update properties of existing management groups:
 **Solution**:
 ```bicep
 {
-  id: 'corp-prod'  // ID stays the same
-  displayName: 'Corporate Production'  // Display name updated
-  parentId: 'landing-zone'
+  id: 'mg-corp'  // ID stays the same
+  displayName: 'Corporate Landing Zones'  // Display name updated
+  parentId: 'mg-landing-zones'
 }
 ```
 

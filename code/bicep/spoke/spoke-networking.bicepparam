@@ -13,7 +13,7 @@ param environment = 'dev'
 
 param locationCode = 'cac'
 
-param instanceNumber = '001'
+param instanceNumber = '01'
 
 // Location
 param location = 'canadacentral'
@@ -45,7 +45,7 @@ param hubPrivateDnsZoneName = 'internal.organization.com'
 param hubPrivateDnsZoneResourceId = ''
 
 // The resource group name where hub infrastructure is deployed
-param hubResourceGroupName = 'rg-hub-live-cac-001'
+param hubResourceGroupName = 'rg-hub-live-cac-01'
 
 // The subscription ID where hub infrastructure is deployed
 param hubSubscriptionId = ''
@@ -59,11 +59,11 @@ param hubSubscriptionId = ''
 param enableIpamAllocation = false
 
 // Hub AVNM name (required if enableIpamAllocation is true)
-// Get from hub deployment outputs: avnm-hub-live-cac-001
+// Get from hub deployment outputs: avnm-hub-live-cac-01
 param hubAvnmName = ''
 
 // Hub IPAM Pool name (required if enableIpamAllocation is true)
-// Get from hub deployment outputs: ipam-hub-live-cac-001
+// Get from hub deployment outputs: ipam-hub-live-cac-01
 param hubIpamPoolName = ''
 
 // ============================================================================

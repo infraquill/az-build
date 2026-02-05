@@ -34,7 +34,7 @@ param environment string = 'live'
 param locationCode string = 'cac'
 
 @description('The instance number for naming convention')
-param instanceNumber string = '001'
+param instanceNumber string = '01'
 
 @description('The Azure region for the CloudOps resources')
 param location string = 'canadacentral'
@@ -103,7 +103,7 @@ var organizationProfile = {
   organizations: [
     {
       url: azureDevOpsOrganizationUrl
-      projects: empty(azureDevOpsProjectNames) ? null : azureDevOpsProjectNames
+      projects: empty(azureDevOpsProjectNames) ? [] : azureDevOpsProjectNames
       parallelism: poolMaximumConcurrency
     }
   ]

@@ -97,19 +97,34 @@ The `managementGroups` array defines all management groups to create. **Importan
 ```bicep
 param managementGroups = [
   {
-    id: 'contoso'
-    displayName: 'Contoso Corporation'
+    id: 'mg-contoso'
+    displayName: 'Contoso Organization'
     parentId: tenantRootManagementGroupId
   }
   {
-    id: 'platform'
+    id: 'mg-platform'
     displayName: 'Platform'
-    parentId: 'contoso'
+    parentId: 'mg-contoso'
   }
   {
-    id: 'landing-zone'
-    displayName: 'Landing Zone'
-    parentId: 'contoso'
+    id: 'mg-landing-zones'
+    displayName: 'Landing Zones'
+    parentId: 'mg-contoso'
+  }
+  {
+    id: 'mg-identity'
+    displayName: 'Identity'
+    parentId: 'mg-platform'
+  }
+  {
+    id: 'mg-corp'
+    displayName: 'Corp'
+    parentId: 'mg-landing-zones'
+  }
+  {
+    id: 'mg-corp-prod'
+    displayName: 'Corp Production'
+    parentId: 'mg-corp'
   }
   // Add more management groups as needed
 ]

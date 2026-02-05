@@ -14,7 +14,7 @@ param environment = 'dev'
 
 param locationCode = 'cac'
 
-param instanceNumber = '001'
+param instanceNumber = '01'
 
 param owner = 'example-owner'
 
