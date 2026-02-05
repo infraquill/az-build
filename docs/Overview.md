@@ -9,17 +9,26 @@ The deployment follows a specific sequence to ensure dependencies are met. Each 
 ```mermaid
 flowchart TB
     subgraph phase1 [Phase 1: Foundation]
-        step1["1. Management Group Hierarchy"] --> step2["2. Governance - Policies"]
+        step1["1. Management Group Hierarchy"]
+        step2["2. Policy Definitions"]
+        step3["3. Role Definitions"]
+        step4["4. Logging Infrastructure"]
+        step5["5. Diagnostic Settings"]
+        step1 --> step2 & step3
+        step2 & step3 --> step4
+        step4 --> step5
     end
 
     subgraph phase2 [Phase 2: Platform Infrastructure]
-        step3["3. Monitoring Infrastructure"]
-        step4["4. Hub Infrastructure - Connectivity"]
+        step6["6. Monitoring Infrastructure"]
+        step7["7. Hub Infrastructure - Connectivity"]
+        step8["8. Role Assignments"]
     end
 
     subgraph phase3 [Phase 3: Workload Infrastructure]
-        step5["5. Subscription Vending"] --> step6["6. Spoke Networking"]
-        step6 --> step7["7. CloudOps - First Workload"]
+        step9["9. Subscription Vending"] --> step10["10. Spoke Networking"]
+        step10 --> step11["11. CloudOps - First Workload"]
+        step10 --> step12["12. Governance - Policy Assignments"]
     end
 
     phase1 --> phase2
@@ -30,267 +39,99 @@ flowchart TB
 
 ## Phase 1: Foundation
 
-Establish the organizational structure and governance baseline for your Azure environment.
+Establish the organizational structure and governance baseline.
 
 ### Step 1: Management Group Hierarchy
+**Purpose**: Create the management group structure that organizes subscriptions.
+- **Pipeline**: `mg-hierarchy-pipeline.yaml`
+- **Docs**: [Management Group Hierarchy](Management-Group-Hierarchy.md)
 
-**Purpose**: Create the management group structure that organizes subscriptions and enables centralized governance.
+### Step 2: Policy Definitions
+**Purpose**: Publish custom Azure Policy Definitions to the intermediate root Management Group.
+- **Pipeline**: `policy-definitions-pipeline.yaml`
+- **Output**: Custom Policy Definitions available for assignment.
 
-| Item | Details |
-|------|---------|
-| **Pipeline** | `mg-hierarchy-pipeline.yaml` |
-| **Scope** | Tenant |
-| **Prerequisites** | Service Principal with Tenant Root permissions |
-| **Output** | Management group hierarchy (Platform, Landing Zone, Sandbox, Decommissioned) |
+### Step 3: Role Definitions
+**Purpose**: Publish custom RBAC Role Definitions (e.g., "Network Operations") to the hierarchy.
+- **Pipeline**: `role-definitions-pipeline.yaml`
+- **Output**: Custom Role Definitions available for assignment.
 
-**What Gets Created**:
-- Organization root management group
-- Platform management groups (Management, Connectivity)
-- Landing Zone management groups (Corp/Online, Prod/Non-Prod)
-- Sandbox and Decommissioned management groups
+### Step 4: Logging Infrastructure
+**Purpose**: Deploy the central Log Analytics Workspace and Automation Account.
+- **Pipeline**: `logging-pipeline.yaml`
+- **Docs**: [Logging Infrastructure](Logging-Infrastructure.md)
 
-📖 **Documentation**: [Management Group Hierarchy](Management-Group-Hierarchy.md)
-
----
-
-### Step 2: Governance (Policies)
-
-**Purpose**: Deploy Azure Policies in audit mode for compliance reporting and security visibility across the management group hierarchy.
-
-| Item | Details |
-|------|---------|
-| **Pipeline** | `governance-pipeline.yaml` |
-| **Scope** | Management Group |
-| **Prerequisites** | Step 1 completed |
-| **Output** | Policy assignments (MCSB, Canada PBMM) in audit mode |
-
-**What Gets Created**:
-- Microsoft Cloud Security Benchmark (MCSB) policy assignment (audit mode)
-- Canada Federal PBMM policy assignment (audit mode)
-
-> **Note:** Policies are deployed in audit mode and are intended to remain that way. Use compliance data to identify gaps, then remediate through IaC pipelines. This keeps infrastructure changes centralized and prevents drift.
-
-📖 **Documentation**: [Governance](Governance.md)
+### Step 5: Management Group Diagnostic Settings
+**Purpose**: Configure Management Groups to send Activity Logs to the central workspace.
+- **Pipeline**: `mg-diag-settings-pipeline.yaml`
+- **Docs**: [Diagnostic Settings](Management-Group-Diagnostic-Settings.md)
 
 ---
 
 ## Phase 2: Platform Infrastructure
 
-Deploy the core platform services that support all workloads.
+Deploy core services and access controls.
 
-> **Note**: Platform subscriptions (Management, Connectivity) must exist before deploying these components. Create them manually or use Subscription Vending first if needed.
+### Step 6: Monitoring Infrastructure
+**Purpose**: Deploy Action Groups and Alert Rules to monitor the platform.
+- **Pipeline**: `monitoring-pipeline.yaml`
+- **Docs**: [Monitoring Infrastructure](Monitoring-Infrastructure.md)
 
-### Step 3: Monitoring Infrastructure
+### Step 7: Hub Infrastructure
+**Purpose**: Deploy hub networking (VNet, Firewall, Gateway) and AVNM.
+- **Pipeline**: `hub-pipeline.yaml`
+- **Docs**: [Hub Infrastructure](Hub-Infrastructure.md)
 
-**Purpose**: Deploy centralized monitoring and logging infrastructure in the Management subscription.
-
-| Item | Details |
-|------|---------|
-| **Pipeline** | `monitoring-pipeline.yaml` |
-| **Scope** | Management Subscription |
-| **Prerequisites** | Management subscription exists |
-| **Output** | Log Analytics workspace, diagnostic settings |
-
-**What Gets Created**:
-- Log Analytics workspace (central log repository)
-- Resource group for monitoring resources
-- Deployment Stack for resource protection
-
-📖 **Documentation**: [Monitoring Infrastructure](Monitoring-Infrastructure.md)
-
----
-
-
-### Step 4: Hub Infrastructure
-
-**Purpose**: Deploy the hub networking infrastructure in the Connectivity subscription, including virtual network, AVNM, and optional security components.
-
-| Item | Details |
-|------|---------|
-| **Pipeline** | `hub-pipeline.yaml` |
-| **Scope** | Connectivity Subscription |
-| **Prerequisites** | Steps 1-3 completed, Connectivity subscription exists |
-| **Output** | Hub VNet, AVNM, Private DNS Zone, optional Firewall/Gateway |
-
-**What Gets Created**:
-- Hub Virtual Network with subnets
-- Azure Virtual Network Manager (AVNM) for hub-spoke connectivity
-- Private DNS Zone for internal resolution
-- Network Watcher
-- IPAM Pool (optional) for centralized IP management
-- Optional: Azure Firewall, Application Gateway, VPN Gateway, DDoS Protection
-
-📖 **Documentation**: [Hub Infrastructure](Hub-Infrastructure.md)
-
----
-
-### Step 5: Role Assignments
-
-**Purpose**: Deploy RBAC assignments (Owner, Contributor, Readers) to Management Groups to grant access to teams.
-
-| Item | Details |
-|------|---------|
-| **Pipeline** | `role-assignments-pipeline.yaml` |
-| **Scope** | Management Group |
-| **Prerequisites** | Step 1 completed, Service Principal with permissions |
-| **Output** | Role Assignments on the MG hierarchy |
-
-**What Gets Created**:
-- RBAC assignments for AD Groups or Users
-- Integration with Custom Roles (if defined)
-
-📖 **Documentation**: [Role Assignments](Role-Assignments.md)
+### Step 8: Role Assignments
+**Purpose**: Grant access (RBAC) to users/groups across the hierarchy.
+- **Pipeline**: `role-assignments-pipeline.yaml`
+- **Docs**: [Role Assignments](Role-Assignments.md)
 
 ---
 
 ## Phase 3: Workload Infrastructure
 
-Deploy workload subscriptions, spoke networks, and the first operational workload.
+Deploy workloads and enforce governance.
 
-### Step 6: Subscription Vending
+### Step 9: Subscription Vending
+**Purpose**: Automate subscription creation and placement.
+- **Pipeline**: `sub-vending-pipeline.yaml`
+- **Docs**: [Subscription Vending](Subscription-Vending.md)
 
-**Purpose**: Automate the creation of new Azure subscriptions with consistent naming, tagging, and management group placement.
+### Step 10: Spoke Networking
+**Purpose**: Deploy spoke VNets and connect them to the Hub.
+- **Pipeline**: `spoke-networking-pipeline.yaml`
+- **Docs**: [Spoke Infrastructure](Spoke-Infrastructure.md)
 
-| Item | Details |
-|------|---------|
-| **Pipeline** | `sub-vending-pipeline.yaml` |
-| **Scope** | Tenant/Management Group |
-| **Prerequisites** | Step 1 completed, billing permissions configured |
-| **Output** | New subscription in the appropriate management group |
+### Step 11: CloudOps (First Workload)
+**Purpose**: Deploy DevOps agents and operational tooling.
+- **Pipeline**: `cloudops-pipeline.yaml`
+- **Docs**: [CloudOps](CloudOps.md)
 
-**What Gets Created**:
-- New Azure subscription
-- Subscription tags
-- Management group assignment
-
-**Use This When**:
-- Creating a new workload subscription (Corp/Online)
-- Creating a CloudOps subscription
-- Creating any new subscription that needs to follow standards
-
-📖 **Documentation**: [Subscription Vending](Subscription-Vending.md)
-
----
-
-### Step 7: Spoke Networking
-
-**Purpose**: Deploy spoke virtual networks for workload subscriptions, automatically connected to the hub via AVNM.
-
-| Item | Details |
-|------|---------|
-| **Pipeline** | `spoke-networking-pipeline.yaml` |
-| **Scope** | Workload Subscription |
-| **Prerequisites** | Steps 4-6 completed (Hub exists, spoke subscription exists) |
-| **Output** | Spoke VNet connected to hub, Private DNS Zone link |
-
-**What Gets Created**:
-- Spoke Virtual Network
-- AVNM automatic connectivity to hub
-- Private DNS Zone link to hub DNS
-- IPAM static CIDR allocation (optional)
-- Deployment Stack for resource protection
-
-📖 **Documentation**: [Spoke Infrastructure](Spoke-Infrastructure.md)
-
----
-
-### Step 8: CloudOps (First Workload)
-
-**Purpose**: Deploy the CloudOps infrastructure including Managed DevOps Pools for Azure DevOps agents with private networking.
-
-| Item | Details |
-|------|---------|
-| **Pipeline** | `cloudops-devcenter-pipeline.yaml` then `cloudops-pipeline.yaml` |
-| **Scope** | CloudOps Subscription |
-| **Prerequisites** | Steps 5-6 completed for CloudOps subscription |
-| **Output** | Managed DevOps Pool with hub-spoke connectivity |
-
-**What Gets Created**:
-- DevCenter infrastructure
-- Managed DevOps Pool (Azure DevOps agents)
-- Private network connectivity via AVNM
-
-**Why CloudOps First?**:
-- Enables private infrastructure deployment for subsequent workloads
-- Agents have line-of-sight to hub and all spokes via AVNM
-- Native scale-to-zero reduces costs when not in use
-
-📖 **Documentation**: [CloudOps](CloudOps.md)
-
----
-
-## Prerequisites Checklist
-
-Before starting deployment, ensure you have:
-
-- [ ] **Azure AD Tenant** with appropriate permissions
-- [ ] **Azure DevOps Organization** and project configured
-- [ ] **Service Principal** created for pipeline authentication
-- [ ] **RBAC Permissions** assigned to service principal ([RBAC Requirements](RBAC-Requirements.md))
-- [ ] **Billing Permissions** for subscription creation (if using sub-vending)
-- [ ] **Variable Groups** configured in Azure DevOps
-
-### Service Principal Quick Setup
-
-For initial deployment, assign Owner at Tenant Root Management Group:
-
-```bash
-SP_OBJECT_ID="<your-service-principal-object-id>"
-TENANT_ROOT_MG=$(az account management-group list --query "[?displayName=='Tenant Root Group'].name" -o tsv)
-
-az role assignment create \
-  --assignee "$SP_OBJECT_ID" \
-  --role "Owner" \
-  --scope "/providers/Microsoft.Management/managementGroups/$TENANT_ROOT_MG"
-```
-
-See [RBAC Requirements](RBAC-Requirements.md) for detailed per-pipeline permissions.
-
----
-
-## Component Dependencies
-
-| Component | Depends On |
-|-----------|------------|
-| Management Group Hierarchy | — |
-| Governance | Management Group Hierarchy |
-| Monitoring Infrastructure | Management Subscription |
-| Hub Infrastructure | Monitoring Infrastructure |
-| Subscription Vending | Management Group Hierarchy |
-| Spoke Networking | Hub Infrastructure, Target Subscription |
-| CloudOps | Spoke Networking (CloudOps spoke) |
-
----
-
-## Quick Reference: Pipelines
-
-| Pipeline | Purpose | Scope |
-|----------|---------|-------|
-| `mg-hierarchy-pipeline.yaml` | Management group hierarchy | Tenant |
-| `governance-pipeline.yaml` | Policy assignments | Management Group |
-| `monitoring-pipeline.yaml` | Log Analytics workspace | Subscription |
-| `hub-pipeline.yaml` | Hub networking | Subscription |
-| `sub-vending-pipeline.yaml` | Subscription creation | Tenant |
-| `spoke-networking-pipeline.yaml` | Spoke networking | Subscription |
-| `cloudops-devcenter-pipeline.yaml` | DevCenter setup | Subscription |
-| `cloudops-pipeline.yaml` | Managed DevOps Pool | Subscription |
+### Step 12: Governance (Policy Assignments)
+**Purpose**: Assign policies (MCSB, PBMM) to Management Groups.
+- **Pipeline**: `governance-pipeline.yaml`
+- **Docs**: [Governance](Governance.md)
 
 ---
 
 ## Documentation Index
 
-### Foundation
-- [Management Group Hierarchy](Management-Group-Hierarchy.md) - Structure and governance hierarchy
-- [Governance](Governance.md) - Azure Policy assignments for compliance and security
+### Core Components
+- [Logging Infrastructure](Logging-Infrastructure.md)
+- [Management Group Diagnostic Settings](Management-Group-Diagnostic-Settings.md)
+- [Role Assignments](Role-Assignments.md)
+- [Monitoring Infrastructure](Monitoring-Infrastructure.md)
 
-### Platform Infrastructure
-- [Monitoring Infrastructure](Monitoring-Infrastructure.md) - Centralized logging and monitoring
-- [Hub Infrastructure](Hub-Infrastructure.md) - Hub networking and connectivity
+### Networking
+- [Hub Infrastructure](Hub-Infrastructure.md)
+- [Spoke Infrastructure](Spoke-Infrastructure.md)
 
-### Workload Infrastructure
-- [Subscription Vending](Subscription-Vending.md) - Automated subscription provisioning
-- [Spoke Infrastructure](Spoke-Infrastructure.md) - Spoke networking for workloads
-- [CloudOps](CloudOps.md) - DevOps agents and operational tooling
+### Governance
+- [Management Group Hierarchy](Management-Group-Hierarchy.md)
+- [Governance](Governance.md) (Policy Assignments)
 
-### Reference
-- [RBAC Requirements](RBAC-Requirements.md) - Service principal permissions guide
+### Operations
+- [Subscription Vending](Subscription-Vending.md)
+- [CloudOps](CloudOps.md)
+- [RBAC Requirements](RBAC-Requirements.md)
