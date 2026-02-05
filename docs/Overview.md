@@ -100,6 +100,7 @@ Deploy the core platform services that support all workloads.
 
 ---
 
+
 ### Step 4: Hub Infrastructure
 
 **Purpose**: Deploy the hub networking infrastructure in the Connectivity subscription, including virtual network, AVNM, and optional security components.
@@ -123,11 +124,30 @@ Deploy the core platform services that support all workloads.
 
 ---
 
+### Step 5: Role Assignments
+
+**Purpose**: Deploy RBAC assignments (Owner, Contributor, Readers) to Management Groups to grant access to teams.
+
+| Item | Details |
+|------|---------|
+| **Pipeline** | `role-assignments-pipeline.yaml` |
+| **Scope** | Management Group |
+| **Prerequisites** | Step 1 completed, Service Principal with permissions |
+| **Output** | Role Assignments on the MG hierarchy |
+
+**What Gets Created**:
+- RBAC assignments for AD Groups or Users
+- Integration with Custom Roles (if defined)
+
+📖 **Documentation**: [Role Assignments](Role-Assignments.md)
+
+---
+
 ## Phase 3: Workload Infrastructure
 
 Deploy workload subscriptions, spoke networks, and the first operational workload.
 
-### Step 5: Subscription Vending
+### Step 6: Subscription Vending
 
 **Purpose**: Automate the creation of new Azure subscriptions with consistent naming, tagging, and management group placement.
 
@@ -152,7 +172,7 @@ Deploy workload subscriptions, spoke networks, and the first operational workloa
 
 ---
 
-### Step 6: Spoke Networking
+### Step 7: Spoke Networking
 
 **Purpose**: Deploy spoke virtual networks for workload subscriptions, automatically connected to the hub via AVNM.
 
@@ -160,7 +180,7 @@ Deploy workload subscriptions, spoke networks, and the first operational workloa
 |------|---------|
 | **Pipeline** | `spoke-networking-pipeline.yaml` |
 | **Scope** | Workload Subscription |
-| **Prerequisites** | Steps 4-5 completed (Hub exists, spoke subscription exists) |
+| **Prerequisites** | Steps 4-6 completed (Hub exists, spoke subscription exists) |
 | **Output** | Spoke VNet connected to hub, Private DNS Zone link |
 
 **What Gets Created**:
@@ -174,7 +194,7 @@ Deploy workload subscriptions, spoke networks, and the first operational workloa
 
 ---
 
-### Step 7: CloudOps (First Workload)
+### Step 8: CloudOps (First Workload)
 
 **Purpose**: Deploy the CloudOps infrastructure including Managed DevOps Pools for Azure DevOps agents with private networking.
 

@@ -1,0 +1,184 @@
+# Azure Pipeline to deploy Role Assignments
+# This pipeline deploys RBAC assignments to the Management Group scope.
+
+trigger: none
+pr: none
+
+pool:
+  vmImage: "ubuntu-latest"
+
+variables:
+  - group: common-variables
+  - group: role-assignments-variables # Assumed new variable group for specific RBAC config if needed
+  - name: bicepPath
+    value: "code/bicep/role-assignments"
+  - name: templateFile
+    value: "$(bicepPath)/role-assignments.bicep"
+  - name: parametersFile
+    value: "$(bicepPath)/role-assignments.bicepparam"
+  - name: scriptsPath
+    value: "code/pipelines/role-assignments"
+  - name: stackName
+    value: "stack-role-assignments-${{ parameters.environment }}-${{ parameters.locationCode }}"
+
+parameters:
+  - name: topLevelManagementGroupId
+    displayName: "Top Level Management Group ID"
+    type: string
+  - name: environment
+    displayName: "Environment"
+    type: string
+    default: "live"
+  - name: locationCode
+    displayName: "Location Code"
+    type: string
+    default: "cac"
+  - name: location
+    displayName: "Azure Region"
+    type: string
+    default: "canadacentral"
+  - name: owner
+    displayName: "Owner"
+    type: string
+    default: "$(defaultOwner)"
+  - name: managedBy
+    displayName: "Managed By"
+    type: string
+    default: "$(managedBy)"
+  # Deployment Stack settings
+  - name: denySettingsMode
+    displayName: "Deny Settings Mode"
+    type: string
+    default: "denyWriteAndDelete"
+    values:
+      - none
+      - denyDelete
+      - denyWriteAndDelete
+  - name: deploymentStage
+    displayName: "Pipeline Stage to Run"
+    type: string
+    default: "Preview"
+    values:
+      - Validation
+      - Preview
+      - Deploy
+      - Remove
+
+stages:
+  - stage: Validate
+    displayName: "Validate Deployment Stack"
+    jobs:
+      - template: ../templates/jobs/validate-environment-job.yaml
+        parameters:
+          environment: ${{ parameters.environment }}
+      - job: ValidateStack
+        displayName: "Validate Stack"
+        dependsOn: ValidateEnvironment
+        steps:
+          - checkout: self
+          - task: AzureCLI@2
+            displayName: "Validate Role Assignments Stack"
+            inputs:
+              azureSubscription: "$(azureServiceConnection)"
+              scriptType: "bash"
+              scriptLocation: "inlineScript"
+              inlineScript: |
+                 bash $(scriptsPath)/ra-validate-stack.sh \
+                  "${{ parameters.topLevelManagementGroupId }}" \
+                  "$(templateFile)" \
+                  "$(parametersFile)" \
+                  "${{ parameters.location }}" \
+                  "$(stackName)" \
+                  "${{ parameters.denySettingsMode }}" \
+                  "${{ parameters.environment }}" \
+                  "${{ parameters.owner }}" \
+                  "${{ parameters.managedBy }}"
+
+  - stage: Preview
+    displayName: "Preview Stack State"
+    dependsOn: Validate
+    condition: |
+      and(
+        eq(dependencies.Validate.result, 'Succeeded'),
+        in('${{ parameters.deploymentStage }}', 'Preview', 'Deploy')
+      )
+    jobs:
+      - job: PreviewStack
+        displayName: "Preview Stack"
+        steps:
+          - checkout: self
+          - task: AzureCLI@2
+            displayName: "Preview Stack State"
+            inputs:
+              azureSubscription: "$(azureServiceConnection)"
+              scriptType: "bash"
+              scriptLocation: "inlineScript"
+              inlineScript: |
+                 bash $(scriptsPath)/ra-preview-stack.sh \
+                  "${{ parameters.topLevelManagementGroupId }}" \
+                  "$(stackName)"
+
+  - stage: Deploy
+    displayName: "Deploy Role Assignments Stack"
+    dependsOn: [Validate, Preview]
+    condition: |
+      and(
+        eq(dependencies.Validate.result, 'Succeeded'),
+        in(dependencies.Preview.result, 'Succeeded', 'Skipped'),
+        eq('${{ parameters.deploymentStage }}', 'Deploy')
+      )
+    jobs:
+      - deployment: DeployRoleAssignments
+        displayName: "Deploy Role Assignments"
+        environment: "${{ parameters.environment }}"
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - checkout: self
+                - task: AzureCLI@2
+                  displayName: "Deploy Role Assignments Stack"
+                  inputs:
+                    azureSubscription: "$(azureServiceConnection)"
+                    scriptType: "bash"
+                    scriptLocation: "inlineScript"
+                    inlineScript: |
+                      bash $(scriptsPath)/ra-deploy-stack.sh \
+                        "${{ parameters.topLevelManagementGroupId }}" \
+                        "$(templateFile)" \
+                        "$(parametersFile)" \
+                        "${{ parameters.location }}" \
+                        "$(stackName)" \
+                        "${{ parameters.denySettingsMode }}" \
+                        "${{ parameters.environment }}" \
+                        "${{ parameters.owner }}" \
+                        "${{ parameters.managedBy }}"
+
+  - stage: Remove
+    displayName: "Remove Role Assignments Stack"
+    dependsOn: Validate
+    condition: |
+      and(
+        eq(dependencies.Validate.result, 'Succeeded'),
+        eq('${{ parameters.deploymentStage }}', 'Remove')
+      )
+    jobs:
+      - deployment: RemoveStack
+        displayName: "Remove Stack"
+        environment: "${{ parameters.environment }}"
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - checkout: self
+                - task: AzureCLI@2
+                  displayName: "Delete Stack"
+                  inputs:
+                    azureSubscription: "$(azureServiceConnection)"
+                    scriptType: "bash"
+                    scriptLocation: "inlineScript"
+                    inlineScript: |
+                      bash $(scriptsPath)/ra-delete-stack.sh \
+                        "${{ parameters.topLevelManagementGroupId }}" \
+                        "$(stackName)" \
+                        "deleteAll" # Default action on remove

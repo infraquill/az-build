@@ -1,13 +1,12 @@
 #!/usr/bin/env bash
 #
-# mon-validate-stack.sh
-# Location: code/pipelines/monitoring/
+# logging-deploy-stack.sh
+# Location: code/pipelines/logging/
 #
-# Validates the monitoring deployment stack at subscription scope.
-# Validates subscription ID and runs az stack sub validate.
+# Deploys the logging infrastructure (Workspace + Automation) using Deployment Stacks. at subscription scope.
 #
 # Usage:
-#   bash mon-validate-stack.sh \
+#   bash logging-deploy-stack.sh \
 #     <monitoringSubscriptionId> \
 #     <templateFile> \
 #     <parametersFile> \
@@ -20,17 +19,12 @@
 #     <environment> \
 #     <locationCode> \
 #     <instanceNumber> \
-#     <location> \
-#     <location> \
-#     <logAnalyticsWorkspaceResourceId> \
-#     <owner> \
-#     <managedBy> \
-#     <actionGroupEmails> \
-#     <actionGroupSmsNumbers>
+#     <location>
+
 #
 # Exit codes:
-#   0 - Validation succeeded
-#   1 - Validation failed
+#   0 - Deployment succeeded
+#   1 - Deployment failed
 
 set -euo pipefail
 
@@ -48,19 +42,10 @@ ENVIRONMENT="${10:-}"
 LOCATION_CODE="${11:-}"
 INSTANCE_NUMBER="${12:-}"
 LOCATION="${13:-}"
-LOG_ANALYTICS_WORKSPACE_RESOURCE_ID="${14:-}"
-OWNER="${15:-}"
-MANAGED_BY="${16:-}"
-ACTION_GROUP_EMAILS="${17:-}"
-ACTION_GROUP_SMS_NUMBERS="${18:-}"
-
-# Validate that monitoringSubscriptionId is set
-if [ -z "$MONITORING_SUBSCRIPTION_ID" ]; then
-  echo "##[error]monitoringSubscriptionId is not set in the monitoring-variables variable group."
-  echo "Please set the subscription ID in the variable group before running this pipeline."
-  exit 1
-fi
-echo "✓ Monitoring subscription ID: ${MONITORING_SUBSCRIPTION_ID}"
+DATA_RETENTION="${14:-}"
+DAILY_QUOTA_GB="${15:-}"
+OWNER="${16:-}"
+MANAGED_BY="${17:-}"
 
 # Build parameter overrides for pipeline parameters
 # Note: Don't use quotes around values - they become part of the value
@@ -80,8 +65,11 @@ fi
 if [ -n "$LOCATION" ]; then
   PARAMS="$PARAMS --parameters location=$LOCATION"
 fi
-if [ -n "$LOG_ANALYTICS_WORKSPACE_RESOURCE_ID" ]; then
-  PARAMS="$PARAMS --parameters logAnalyticsWorkspaceResourceId=$LOG_ANALYTICS_WORKSPACE_RESOURCE_ID"
+if [ -n "$DATA_RETENTION" ]; then
+  PARAMS="$PARAMS --parameters dataRetention=$DATA_RETENTION"
+fi
+if [ -n "$DAILY_QUOTA_GB" ]; then
+  PARAMS="$PARAMS --parameters dailyQuotaGb=$DAILY_QUOTA_GB"
 fi
 if [ -n "$OWNER" ]; then
   PARAMS="$PARAMS --parameters owner=$OWNER"
@@ -91,14 +79,13 @@ if [ -n "$MANAGED_BY" ]; then
 fi
 
 # Convert comma-separated email list from variable group to JSON array for Bicep
-# Format: "email1@example.com,email2@example.com" -> JSON array of receiver objects
 EMAIL_RECEIVERS="[]"
 if [ -n "$ACTION_GROUP_EMAILS" ]; then
   EMAIL_RECEIVERS="["
   IFS=',' read -ra EMAILS <<< "$ACTION_GROUP_EMAILS"
   FIRST=true
   for email in "${EMAILS[@]}"; do
-    email=$(echo "$email" | xargs)  # Trim whitespace
+    email=$(echo "$email" | xargs)
     if [ -n "$email" ]; then
       if [ "$FIRST" = true ]; then
         FIRST=false
@@ -112,14 +99,13 @@ if [ -n "$ACTION_GROUP_EMAILS" ]; then
 fi
 
 # Convert comma-separated SMS list from variable group to JSON array for Bicep
-# Format: "1:5551234567,1:5559876543" -> JSON array of SMS receiver objects
 SMS_RECEIVERS="[]"
 if [ -n "$ACTION_GROUP_SMS_NUMBERS" ]; then
   SMS_RECEIVERS="["
   IFS=',' read -ra SMS_LIST <<< "$ACTION_GROUP_SMS_NUMBERS"
   FIRST=true
   for sms in "${SMS_LIST[@]}"; do
-    sms=$(echo "$sms" | xargs)  # Trim whitespace
+    sms=$(echo "$sms" | xargs)
     if [ -n "$sms" ]; then
       IFS=':' read -r country phone <<< "$sms"
       if [ -n "$country" ] && [ -n "$phone" ]; then
@@ -136,23 +122,21 @@ if [ -n "$ACTION_GROUP_SMS_NUMBERS" ]; then
 fi
 
 # Write array values to temp files (one value per file) to avoid shell escaping issues
-# When using .bicepparam files, we pass arrays as: paramName=@file (where file contains just the JSON array)
 EMAIL_FILE=$(mktemp)
 SMS_FILE=$(mktemp)
 echo "${EMAIL_RECEIVERS}" > "$EMAIL_FILE"
 echo "${SMS_RECEIVERS}" > "$SMS_FILE"
 
-az stack sub validate \
+az stack sub create \
   --name "$STACK_NAME" \
   --subscription "$MONITORING_SUBSCRIPTION_ID" \
   --location "$DEPLOYMENT_LOCATION" \
   --template-file "$TEMPLATE_FILE" \
   --parameters "$PARAMETERS_FILE" \
   --parameters projectName="$PROJECT_NAME" \
-  --parameters actionGroupEmailReceivers=@"$EMAIL_FILE" \
-  --parameters actionGroupSmsReceivers=@"$SMS_FILE" \
   --deny-settings-mode "$DENY_SETTINGS_MODE" \
   --action-on-unmanage "$ACTION_ON_UNMANAGE" \
+  --yes \
   $PARAMS
 
 # Clean up temp files

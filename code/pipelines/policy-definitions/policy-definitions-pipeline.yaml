@@ -1,0 +1,196 @@
+# Azure Pipeline to deploy Custom Policy Definitions
+# This pipeline deploys custom policy definitions at management group scope.
+# Note: This pipeline handles Definitions only. Assignments are handled by the governance pipeline.
+
+trigger:
+  batch: true
+  branches:
+    include:
+      - main
+  paths:
+    include:
+      - code/bicep/policy-definitions/**
+      - code/pipelines/policy-definitions/**
+
+pr:
+  branches:
+    include:
+      - main
+  paths:
+    include:
+      - code/bicep/policy-definitions/**
+      - code/pipelines/policy-definitions/**
+
+pool:
+  vmImage: "ubuntu-latest"
+
+variables:
+  - group: common-variables
+  - name: bicepPath
+    value: "code/bicep/policy-definitions"
+  - name: templateFile
+    value: "$(bicepPath)/policy-definitions.bicep"
+  - name: parametersFile
+    value: "$(bicepPath)/policy-definitions.bicepparam"
+  - name: scriptsPath
+    value: "code/pipelines/policy-definitions"
+  - name: deploymentName
+    value: "policy-defs-${{ parameters.environment }}-${{ parameters.locationCode }}-$(Build.BuildNumber)"
+
+parameters:
+  - name: managementGroupId
+    displayName: "Management Group ID (where definitions will be created)"
+    type: string
+    default: "mg-platform"
+    values:
+      - $(azureTenantId)
+      - "mg-platform"
+      - "mg-landing-zone"
+      - "mg-sandbox"
+      - "mg-decommissioned"
+      - "mg-management"
+      - "mg-connectivity"
+      - "mg-corp-prod"
+      - "mg-corp-non-prod"
+      - "mg-online-prod"
+      - "mg-online-non-prod"
+  - name: environment
+    displayName: "Environment"
+    type: string
+    default: "live"
+    values:
+      - nonprod
+      - dev
+      - test
+      - uat
+      - staging
+      - prod
+      - live
+  - name: locationCode
+    displayName: "Location Code (e.g., cac for canada central)"
+    type: string
+    default: "cac"
+  - name: location
+    displayName: "Azure Region"
+    type: string
+    default: "canadacentral"
+  - name: owner
+    displayName: "Owner (e.g. a group mailbox like platform-team@example.com)"
+    type: string
+    default: "$(defaultOwner)"
+  - name: managedBy
+    displayName: "Managed By"
+    type: string
+    default: "$(managedBy)"
+  - name: deploymentStage
+    displayName: "Pipeline Stage to Run"
+    type: string
+    default: "WhatIf"
+    values:
+      - Validation
+      - WhatIf
+      - Deploy
+
+stages:
+  - stage: Validate
+    displayName: "Validate Policy Definitions"
+    # Runs for: Validation, WhatIf, Deploy (all options)
+    jobs:
+      - template: ../templates/jobs/validate-environment-job.yaml
+        parameters:
+          environment: ${{ parameters.environment }}
+      - job: ValidateDeployment
+        displayName: "Validate Deployment"
+        dependsOn: ValidateEnvironment
+        steps:
+          - checkout: self
+
+          - task: AzureCLI@2
+            displayName: "Validate Policy Definitions"
+            inputs:
+              azureSubscription: "$(azureServiceConnection)"
+              scriptType: "bash"
+              scriptLocation: "inlineScript"
+              inlineScript: |
+                bash $(scriptsPath)/defs-validate-deployment.sh \
+                  "${{ parameters.managementGroupId }}" \
+                  "$(templateFile)" \
+                  "$(parametersFile)" \
+                  "$(deploymentLocation)" \
+                  "${{ parameters.environment }}" \
+                  "${{ parameters.location }}" \
+                  "${{ parameters.owner }}" \
+                  "${{ parameters.managedBy }}"
+
+  - stage: WhatIf
+    displayName: "What-If Analysis"
+    dependsOn:
+      - Validate
+    # Runs for: WhatIf, Deploy
+    condition: |
+      and(
+        eq(dependencies.Validate.result, 'Succeeded'),
+        in('${{ parameters.deploymentStage }}', 'WhatIf', 'Deploy')
+      )
+    jobs:
+      - job: WhatIfAnalysis
+        displayName: "What-If"
+        steps:
+          - checkout: self
+
+          - task: AzureCLI@2
+            displayName: "What-If Policy Definitions"
+            inputs:
+              azureSubscription: "$(azureServiceConnection)"
+              scriptType: "bash"
+              scriptLocation: "inlineScript"
+              inlineScript: |
+                bash $(scriptsPath)/defs-whatif-deployment.sh \
+                  "${{ parameters.managementGroupId }}" \
+                  "$(templateFile)" \
+                  "$(parametersFile)" \
+                  "$(deploymentLocation)" \
+                  "${{ parameters.environment }}" \
+                  "${{ parameters.location }}" \
+                  "${{ parameters.owner }}" \
+                  "${{ parameters.managedBy }}"
+
+  - stage: Deploy
+    displayName: "Deploy Policy Definitions"
+    dependsOn:
+      - Validate
+      - WhatIf
+    # Runs for: Deploy only
+    condition: |
+      and(
+        eq(dependencies.Validate.result, 'Succeeded'),
+        in(dependencies.WhatIf.result, 'Succeeded', 'Skipped'),
+        eq('${{ parameters.deploymentStage }}', 'Deploy')
+      )
+    jobs:
+      - deployment: DeployPolicyDefs
+        displayName: "Deploy Policy Definitions"
+        environment: "${{ parameters.environment }}"
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - checkout: self
+
+                - task: AzureCLI@2
+                  displayName: "Deploy Policy Definitions"
+                  inputs:
+                    azureSubscription: "$(azureServiceConnection)"
+                    scriptType: "bash"
+                    scriptLocation: "inlineScript"
+                    inlineScript: |
+                      bash $(scriptsPath)/defs-deploy.sh \
+                        "$(deploymentName)" \
+                        "${{ parameters.managementGroupId }}" \
+                        "$(templateFile)" \
+                        "$(parametersFile)" \
+                        "$(deploymentLocation)" \
+                        "${{ parameters.environment }}" \
+                        "${{ parameters.location }}" \
+                        "${{ parameters.owner }}" \
+                        "${{ parameters.managedBy }}"

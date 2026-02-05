@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 #
-# mon-validate-stack.sh
-# Location: code/pipelines/monitoring/
+# logging-validate-stack.sh
+# Location: code/pipelines/logging/
 #
-# Validates the monitoring deployment stack at subscription scope.
+# Validates the logging deployment stack at subscription scope.
 # Validates subscription ID and runs az stack sub validate.
 #
 # Usage:
@@ -21,12 +21,9 @@
 #     <locationCode> \
 #     <instanceNumber> \
 #     <location> \
-#     <location> \
-#     <logAnalyticsWorkspaceResourceId> \
-#     <owner> \
-#     <managedBy> \
-#     <actionGroupEmails> \
-#     <actionGroupSmsNumbers>
+#     <dataRetention> \
+#     <dailyQuotaGb>
+
 #
 # Exit codes:
 #   0 - Validation succeeded
@@ -48,11 +45,10 @@ ENVIRONMENT="${10:-}"
 LOCATION_CODE="${11:-}"
 INSTANCE_NUMBER="${12:-}"
 LOCATION="${13:-}"
-LOG_ANALYTICS_WORKSPACE_RESOURCE_ID="${14:-}"
-OWNER="${15:-}"
-MANAGED_BY="${16:-}"
-ACTION_GROUP_EMAILS="${17:-}"
-ACTION_GROUP_SMS_NUMBERS="${18:-}"
+DATA_RETENTION="${14:-}"
+DAILY_QUOTA_GB="${15:-}"
+OWNER="${16:-}"
+MANAGED_BY="${17:-}"
 
 # Validate that monitoringSubscriptionId is set
 if [ -z "$MONITORING_SUBSCRIPTION_ID" ]; then
@@ -80,8 +76,11 @@ fi
 if [ -n "$LOCATION" ]; then
   PARAMS="$PARAMS --parameters location=$LOCATION"
 fi
-if [ -n "$LOG_ANALYTICS_WORKSPACE_RESOURCE_ID" ]; then
-  PARAMS="$PARAMS --parameters logAnalyticsWorkspaceResourceId=$LOG_ANALYTICS_WORKSPACE_RESOURCE_ID"
+if [ -n "$DATA_RETENTION" ]; then
+  PARAMS="$PARAMS --parameters dataRetention=$DATA_RETENTION"
+fi
+if [ -n "$DAILY_QUOTA_GB" ]; then
+  PARAMS="$PARAMS --parameters dailyQuotaGb=$DAILY_QUOTA_GB"
 fi
 if [ -n "$OWNER" ]; then
   PARAMS="$PARAMS --parameters owner=$OWNER"
@@ -149,8 +148,7 @@ az stack sub validate \
   --template-file "$TEMPLATE_FILE" \
   --parameters "$PARAMETERS_FILE" \
   --parameters projectName="$PROJECT_NAME" \
-  --parameters actionGroupEmailReceivers=@"$EMAIL_FILE" \
-  --parameters actionGroupSmsReceivers=@"$SMS_FILE" \
+  --parameters dailyQuotaGb=$DAILY_QUOTA_GB \
   --deny-settings-mode "$DENY_SETTINGS_MODE" \
   --action-on-unmanage "$ACTION_ON_UNMANAGE" \
   $PARAMS

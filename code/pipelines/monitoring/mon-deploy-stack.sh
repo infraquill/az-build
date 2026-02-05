@@ -20,8 +20,8 @@
 #     <locationCode> \
 #     <instanceNumber> \
 #     <location> \
-#     <dataRetention> \
-#     <dailyQuotaGb> \
+#     <location> \
+#     <logAnalyticsWorkspaceResourceId> \
 #     <owner> \
 #     <managedBy> \
 #     <actionGroupEmails> \
@@ -47,12 +47,11 @@ ENVIRONMENT="${10:-}"
 LOCATION_CODE="${11:-}"
 INSTANCE_NUMBER="${12:-}"
 LOCATION="${13:-}"
-DATA_RETENTION="${14:-}"
-DAILY_QUOTA_GB="${15:-}"
-OWNER="${16:-}"
-MANAGED_BY="${17:-}"
-ACTION_GROUP_EMAILS="${18:-}"
-ACTION_GROUP_SMS_NUMBERS="${19:-}"
+LOG_ANALYTICS_WORKSPACE_RESOURCE_ID="${14:-}"
+OWNER="${15:-}"
+MANAGED_BY="${16:-}"
+ACTION_GROUP_EMAILS="${17:-}"
+ACTION_GROUP_SMS_NUMBERS="${18:-}"
 
 # Build parameter overrides for pipeline parameters
 # Note: Don't use quotes around values - they become part of the value
@@ -72,11 +71,8 @@ fi
 if [ -n "$LOCATION" ]; then
   PARAMS="$PARAMS --parameters location=$LOCATION"
 fi
-if [ -n "$DATA_RETENTION" ]; then
-  PARAMS="$PARAMS --parameters dataRetention=$DATA_RETENTION"
-fi
-if [ -n "$DAILY_QUOTA_GB" ]; then
-  PARAMS="$PARAMS --parameters dailyQuotaGb=$DAILY_QUOTA_GB"
+if [ -n "$LOG_ANALYTICS_WORKSPACE_RESOURCE_ID" ]; then
+  PARAMS="$PARAMS --parameters logAnalyticsWorkspaceResourceId=$LOG_ANALYTICS_WORKSPACE_RESOURCE_ID"
 fi
 if [ -n "$OWNER" ]; then
   PARAMS="$PARAMS --parameters owner=$OWNER"

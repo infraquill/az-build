@@ -1,41 +1,43 @@
-# Azure Pipeline to deploy Monitoring Infrastructure using Deployment Stacks
-# This pipeline deploys the monitoring Bicep template as a Deployment Stack at subscription scope
-# Deploys centralized Log Analytics workspace, Action Groups, and Alert Rules
-#
-# Parameter Placement Strategy:
-# - Stable configuration (SKU, thresholds, security settings) is in bicepparam files
-# - String values that need organization-wide updates (subscription ID, emails, SMS) are in monitoring-variables
-# - Values that change per run (environment, location) are pipeline parameters
-#
-# Security Note:
-# Public network access controls data plane operations (log queries) only.
-# ARM API deployments work regardless of publicNetworkAccess setting.
-# Microsoft-hosted agents can deploy even with publicNetworkAccess='Disabled'.
+# Azure Pipeline to deploy Logging Infrastructure (Workspace + Automation)
+# This pipeline deploys the logging Bicep template as a Deployment Stack at subscription scope
 
-trigger: none
-pr: none
+trigger:
+  batch: true
+  branches:
+    include:
+      - main
+  paths:
+    include:
+      - code/bicep/logging/**
+      - code/pipelines/logging/**
+
+pr:
+  branches:
+    include:
+      - main
+  paths:
+    include:
+      - code/bicep/logging/**
+      - code/pipelines/logging/**
 
 pool:
   vmImage: "ubuntu-latest"
 
 variables:
   - group: common-variables
-  - group: monitoring-variables
+  - group: monitoring-variables # Reusing for subscription ID which is likely same
   - name: bicepPath
-    value: "code/bicep/monitoring"
+    value: "code/bicep/logging"
   - name: templateFile
-    value: "$(bicepPath)/monitoring.bicep"
+    value: "$(bicepPath)/logging.bicep"
   - name: parametersFile
-    value: "$(bicepPath)/monitoring.bicepparam"
+    value: "$(bicepPath)/logging.bicepparam"
   - name: scriptsPath
-    value: "code/pipelines/monitoring"
+    value: "code/pipelines/logging"
   - name: stackName
     value: "stack-${{ parameters.workloadAlias }}-${{ parameters.environment }}-${{ parameters.locationCode }}-${{ parameters.instanceNumber }}"
 
 parameters:
-  # ============================================================================
-  # CORE NAMING PARAMETERS (vary per deployment)
-  # ============================================================================
   - name: projectName
     displayName: "Project Name"
     type: string
@@ -43,7 +45,7 @@ parameters:
   - name: workloadAlias
     displayName: "Workload Alias"
     type: string
-    default: "monitoring"
+    default: "logging"
   - name: environment
     displayName: "Environment"
     type: string
@@ -61,31 +63,35 @@ parameters:
     type: string
     default: "cac"
   - name: instanceNumber
-    displayName: "Instance Number (e.g., 001 for the first instance)"
+    displayName: "Instance Number (e.g., 01 for the first instance)"
     type: string
-    default: "001"
+    default: "01"
   - name: location
     displayName: "Azure Region"
     type: string
     default: "canadacentral"
 
   # ============================================================================
-  # WORKSPACE REFERENCES
+  # CONFIGURATION
   # ============================================================================
-  - name: logAnalyticsWorkspaceResourceId
-    displayName: "Log Analytics Workspace Resource ID"
-    type: string
-
+  - name: dataRetention
+    displayName: "Data Retention (days, 30-730)"
+    type: number
+    default: 60
+  - name: dailyQuotaGb
+    displayName: "Daily Quota (GB, -1 for unlimited)"
+    type: number
+    default: -1
 
   # ============================================================================
-  # OWNERSHIP PARAMETERS
+  # OWNERSHIP
   # ============================================================================
   - name: managedBy
     displayName: "Managed By"
     type: string
     default: "$(managedBy)"
   - name: owner
-    displayName: "Owner (e.g. a group mailbox like platform-team@organization.com)"
+    displayName: "Owner"
     type: string
     default: "$(defaultOwner)"
 
@@ -121,7 +127,6 @@ parameters:
 stages:
   - stage: Validate
     displayName: "Validate Deployment Stack"
-    # Runs for: Validation, Preview, Deploy (all options)
     jobs:
       - template: ../templates/jobs/validate-environment-job.yaml
         parameters:
@@ -133,13 +138,13 @@ stages:
           - checkout: self
 
           - task: AzureCLI@2
-            displayName: "Validate Monitoring Deployment Stack"
+            displayName: "Validate Logging Deployment Stack"
             inputs:
               azureSubscription: "$(azureServiceConnection)"
               scriptType: "bash"
               scriptLocation: "inlineScript"
               inlineScript: |
-                bash $(scriptsPath)/mon-validate-stack.sh \
+                bash $(scriptsPath)/logging-validate-stack.sh \
                   "$(monitoringSubscriptionId)" \
                   "$(templateFile)" \
                   "$(parametersFile)" \
@@ -153,17 +158,14 @@ stages:
                   "${{ parameters.locationCode }}" \
                   "${{ parameters.instanceNumber }}" \
                   "${{ parameters.location }}" \
-                  "${{ parameters.logAnalyticsWorkspaceResourceId }}" \
+                  "${{ parameters.dataRetention }}" \
+                  "${{ parameters.dailyQuotaGb }}" \
                   "${{ parameters.owner }}" \
-                  "${{ parameters.managedBy }}" \
-                  "$(actionGroupEmails)" \
-                  "$(actionGroupSmsNumbers)"
+                  "${{ parameters.managedBy }}"
 
   - stage: Preview
     displayName: "Preview Stack State"
-    dependsOn:
-      - Validate
-    # Runs for: Preview, Deploy
+    dependsOn: Validate
     condition: |
       and(
         eq(dependencies.Validate.result, 'Succeeded'),
@@ -182,16 +184,15 @@ stages:
               scriptType: "bash"
               scriptLocation: "inlineScript"
               inlineScript: |
-                bash $(scriptsPath)/mon-preview-stack.sh \
+                bash $(scriptsPath)/logging-preview-stack.sh \
                   "$(monitoringSubscriptionId)" \
                   "$(stackName)"
 
   - stage: Deploy
-    displayName: "Deploy Monitoring Deployment Stack"
+    displayName: "Deploy Logging Deployment Stack"
     dependsOn:
       - Validate
       - Preview
-    # Runs for: Deploy only
     condition: |
       and(
         eq(dependencies.Validate.result, 'Succeeded'),
@@ -199,8 +200,8 @@ stages:
         eq('${{ parameters.deploymentStage }}', 'Deploy')
       )
     jobs:
-      - deployment: DeployMonitoringStack
-        displayName: "Deploy Monitoring Stack"
+      - deployment: DeployLoggingStack
+        displayName: "Deploy Logging Stack"
         environment: "${{ parameters.environment }}"
         strategy:
           runOnce:
@@ -209,13 +210,13 @@ stages:
                 - checkout: self
 
                 - task: AzureCLI@2
-                  displayName: "Deploy Monitoring Deployment Stack"
+                  displayName: "Deploy Logging Deployment Stack"
                   inputs:
                     azureSubscription: "$(azureServiceConnection)"
                     scriptType: "bash"
                     scriptLocation: "inlineScript"
                     inlineScript: |
-                      bash $(scriptsPath)/mon-deploy-stack.sh \
+                      bash $(scriptsPath)/logging-deploy-stack.sh \
                         "$(monitoringSubscriptionId)" \
                         "$(templateFile)" \
                         "$(parametersFile)" \
@@ -229,25 +230,22 @@ stages:
                         "${{ parameters.locationCode }}" \
                         "${{ parameters.instanceNumber }}" \
                         "${{ parameters.location }}" \
-                        "${{ parameters.logAnalyticsWorkspaceResourceId }}" \
+                        "${{ parameters.dataRetention }}" \
+                        "${{ parameters.dailyQuotaGb }}" \
                         "${{ parameters.owner }}" \
-                        "${{ parameters.managedBy }}" \
-                        "$(actionGroupEmails)" \
-                        "$(actionGroupSmsNumbers)"
+                        "${{ parameters.managedBy }}"
 
   - stage: Remove
-    displayName: "Remove Monitoring Deployment Stack"
-    dependsOn:
-      - Validate
-    # Runs for: Remove only
+    displayName: "Remove Logging Deployment Stack"
+    dependsOn: Validate
     condition: |
       and(
         eq(dependencies.Validate.result, 'Succeeded'),
         eq('${{ parameters.deploymentStage }}', 'Remove')
       )
     jobs:
-      - deployment: RemoveMonitoringStack
-        displayName: "Remove Monitoring Stack"
+      - deployment: RemoveLoggingStack
+        displayName: "Remove Logging Stack"
         environment: "${{ parameters.environment }}"
         strategy:
           runOnce:
@@ -256,13 +254,13 @@ stages:
                 - checkout: self
 
                 - task: AzureCLI@2
-                  displayName: "Delete Monitoring Deployment Stack"
+                  displayName: "Delete Logging Deployment Stack"
                   inputs:
                     azureSubscription: "$(azureServiceConnection)"
                     scriptType: "bash"
                     scriptLocation: "inlineScript"
                     inlineScript: |
-                      bash $(scriptsPath)/mon-delete-stack.sh \
+                      bash $(scriptsPath)/logging-delete-stack.sh \
                         "$(monitoringSubscriptionId)" \
                         "$(stackName)" \
                         "${{ parameters.actionOnUnmanage }}"

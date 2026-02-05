@@ -40,47 +40,11 @@ param instanceNumber string
 param location string = 'canadacentral'
 
 // ============================================================================
-// WORKSPACE CONFIGURATION PARAMETERS
+// WORKSPACE REFERENCES
 // ============================================================================
 
-@description('Number of days for data retention (30-730 days)')
-@minValue(30)
-@maxValue(730)
-param dataRetention int = 60
-
-@description('The SKU for the Log Analytics workspace.')
-@allowed([
-  'PerGB2018'
-  'CapacityReservation'
-])
-param workspaceSku string = 'PerGB2018'
-
-@description('The capacity reservation level in GB/day. Required when workspaceSku is CapacityReservation. Valid values: 100, 200, 300, 400, 500, 1000, 2000, 5000')
-@allowed([
-  100
-  200
-  300
-  400
-  500
-  1000
-  2000
-  5000
-])
-param capacityReservationLevel int = 100
-
-@description('Daily quota for data ingestion in GB. Set to -1 for unlimited.')
-param dailyQuotaGb int = -1
-
-// ============================================================================
-// SECURITY CONFIGURATION PARAMETERS
-// ============================================================================
-
-@description('Public network access for data plane operations (querying logs, ingesting data). Does NOT affect ARM API deployments - those always work. Default: Enabled for log query convenience.')
-@allowed([
-  'Enabled'
-  'Disabled'
-])
-param publicNetworkAccess string = 'Enabled'
+@description('The resource ID of the existing Log Analytics Workspace')
+param logAnalyticsWorkspaceResourceId string
 
 // ============================================================================
 // ACTION GROUP CONFIGURATION PARAMETERS
@@ -134,8 +98,8 @@ param managedBy string = 'Bicep'
 // COMPUTED VARIABLES
 // ============================================================================
 
-// Construct workspace name following naming convention: law-<workloadAlias>-<environment>-<loc>-<instance>
-var workspaceName = 'law-${workloadAlias}-${environment}-${locationCode}-${instanceNumber}'
+// Workspace name for alert naming context (parsing from ID to avoid parsing logic complexity, just use alias)
+// var workspaceName = 'law-${workloadAlias}-${environment}-${locationCode}-${instanceNumber}'
 
 // Resource group name for monitoring resources
 var resourceGroupName = 'rg-${workloadAlias}-${environment}-${locationCode}-${instanceNumber}'
@@ -152,8 +116,6 @@ var commonTags = {
 }
 
 // SKU configuration - only set capacityReservationLevel when using CapacityReservation SKU
-var skuName = workspaceSku
-var workspaceCapacityReservationLevel = workspaceSku == 'CapacityReservation' ? capacityReservationLevel : null
 
 // ============================================================================
 // RESOURCE GROUP
@@ -164,28 +126,6 @@ resource monitoringResourceGroup 'Microsoft.Resources/resourceGroups@2024-03-01'
   name: resourceGroupName
   location: location
   tags: commonTags
-}
-
-// ============================================================================
-// LOG ANALYTICS WORKSPACE
-// ============================================================================
-
-// Deploy Log Analytics Workspace using AVM
-// Note: Using version 0.14.0 - check Azure/bicep-registry-modules for latest version
-module logAnalyticsWorkspace 'br/public:avm/res/operational-insights/workspace:0.14.0' = {
-  name: 'deploy-${workspaceName}'
-  scope: monitoringResourceGroup
-  params: {
-    name: workspaceName
-    location: location
-    skuName: skuName
-    skuCapacityReservationLevel: workspaceCapacityReservationLevel
-    dataRetention: dataRetention
-    dailyQuotaGb: dailyQuotaGb
-    publicNetworkAccessForIngestion: publicNetworkAccess
-    publicNetworkAccessForQuery: publicNetworkAccess
-    tags: commonTags
-  }
 }
 
 // ============================================================================
@@ -216,7 +156,7 @@ module actionGroup 'br/public:avm/res/insights/action-group:0.4.0' = {
 // Alert: Data Ingestion Volume
 // Triggers when daily data ingestion exceeds the configured threshold
 module dataIngestionAlert 'br/public:avm/res/insights/scheduled-query-rule:0.3.0' = if (enableAlerts) {
-  name: 'deploy-alert-data-ingestion-${workspaceName}'
+  name: 'deploy-alert-data-ingestion-${workloadAlias}'
   scope: monitoringResourceGroup
   params: {
     name: 'alert-data-ingestion-${workloadAlias}-${environment}-${locationCode}-${instanceNumber}'
@@ -224,7 +164,7 @@ module dataIngestionAlert 'br/public:avm/res/insights/scheduled-query-rule:0.3.0
     enabled: true
     kind: 'LogAlert'
     scopes: [
-      logAnalyticsWorkspace.outputs.resourceId
+      logAnalyticsWorkspaceResourceId
     ]
     evaluationFrequency: alertEvaluationFrequency
     windowSize: 'P1D' // 1 day window for daily ingestion
@@ -255,7 +195,7 @@ module dataIngestionAlert 'br/public:avm/res/insights/scheduled-query-rule:0.3.0
 // Alert: Workspace Availability (Heartbeat-based)
 // Triggers when no heartbeat data is received, indicating potential availability issues
 module workspaceAvailabilityAlert 'br/public:avm/res/insights/scheduled-query-rule:0.3.0' = if (enableAlerts) {
-  name: 'deploy-alert-availability-${workspaceName}'
+  name: 'deploy-alert-availability-${workloadAlias}'
   scope: monitoringResourceGroup
   params: {
     name: 'alert-availability-${workloadAlias}-${environment}-${locationCode}-${instanceNumber}'
@@ -263,7 +203,7 @@ module workspaceAvailabilityAlert 'br/public:avm/res/insights/scheduled-query-ru
     enabled: true
     kind: 'LogAlert'
     scopes: [
-      logAnalyticsWorkspace.outputs.resourceId
+      logAnalyticsWorkspaceResourceId
     ]
     evaluationFrequency: alertEvaluationFrequency
     windowSize: alertWindowSize
@@ -297,7 +237,7 @@ module workspaceAvailabilityAlert 'br/public:avm/res/insights/scheduled-query-ru
 // Alert: Query Throttling Detection
 // Triggers when queries are being throttled due to rate limits
 module queryThrottlingAlert 'br/public:avm/res/insights/scheduled-query-rule:0.3.0' = if (enableAlerts) {
-  name: 'deploy-alert-throttling-${workspaceName}'
+  name: 'deploy-alert-throttling-${workloadAlias}'
   scope: monitoringResourceGroup
   params: {
     name: 'alert-query-throttling-${workloadAlias}-${environment}-${locationCode}-${instanceNumber}'
@@ -305,7 +245,7 @@ module queryThrottlingAlert 'br/public:avm/res/insights/scheduled-query-rule:0.3
     enabled: true
     kind: 'LogAlert'
     scopes: [
-      logAnalyticsWorkspace.outputs.resourceId
+      logAnalyticsWorkspaceResourceId
     ]
     evaluationFrequency: alertEvaluationFrequency
     windowSize: 'PT1H'
@@ -342,10 +282,7 @@ module queryThrottlingAlert 'br/public:avm/res/insights/scheduled-query-rule:0.3
 // ============================================================================
 
 @description('The resource ID of the Log Analytics workspace')
-output workspaceResourceId string = logAnalyticsWorkspace.outputs.resourceId
-
-@description('The name of the Log Analytics workspace')
-output workspaceName string = logAnalyticsWorkspace.outputs.name
+output workspaceResourceId string = logAnalyticsWorkspaceResourceId
 
 @description('The name of the resource group')
 output resourceGroupName string = monitoringResourceGroup.name

@@ -1,0 +1,195 @@
+# Azure Pipeline to deploy Custom Role Definitions
+# This pipeline deploys custom role definitions at management group scope.
+
+trigger:
+  batch: true
+  branches:
+    include:
+      - main
+  paths:
+    include:
+      - code/bicep/role-definitions/**
+      - code/pipelines/role-definitions/**
+
+pr:
+  branches:
+    include:
+      - main
+  paths:
+    include:
+      - code/bicep/role-definitions/**
+      - code/pipelines/role-definitions/**
+
+pool:
+  vmImage: "ubuntu-latest"
+
+variables:
+  - group: common-variables
+  - name: bicepPath
+    value: "code/bicep/role-definitions"
+  - name: templateFile
+    value: "$(bicepPath)/role-definitions.bicep"
+  - name: parametersFile
+    value: "$(bicepPath)/role-definitions.bicepparam"
+  - name: scriptsPath
+    value: "code/pipelines/role-definitions"
+  - name: deploymentName
+    value: "role-defs-${{ parameters.environment }}-${{ parameters.locationCode }}-$(Build.BuildNumber)"
+
+parameters:
+  - name: managementGroupId
+    displayName: "Management Group ID (where definitions will be created)"
+    type: string
+    default: "mg-platform"
+    values:
+      - $(azureTenantId)
+      - "mg-platform"
+      - "mg-landing-zone"
+      - "mg-sandbox"
+      - "mg-decommissioned"
+      - "mg-management"
+      - "mg-connectivity"
+      - "mg-corp-prod"
+      - "mg-corp-non-prod"
+      - "mg-online-prod"
+      - "mg-online-non-prod"
+  - name: environment
+    displayName: "Environment"
+    type: string
+    default: "live"
+    values:
+      - nonprod
+      - dev
+      - test
+      - uat
+      - staging
+      - prod
+      - live
+  - name: locationCode
+    displayName: "Location Code (e.g., cac for canada central)"
+    type: string
+    default: "cac"
+  - name: location
+    displayName: "Azure Region"
+    type: string
+    default: "canadacentral"
+  - name: owner
+    displayName: "Owner (e.g. a group mailbox like platform-team@example.com)"
+    type: string
+    default: "$(defaultOwner)"
+  - name: managedBy
+    displayName: "Managed By"
+    type: string
+    default: "$(managedBy)"
+  - name: deploymentStage
+    displayName: "Pipeline Stage to Run"
+    type: string
+    default: "WhatIf"
+    values:
+      - Validation
+      - WhatIf
+      - Deploy
+
+stages:
+  - stage: Validate
+    displayName: "Validate Role Definitions"
+    # Runs for: Validation, WhatIf, Deploy (all options)
+    jobs:
+      - template: ../templates/jobs/validate-environment-job.yaml
+        parameters:
+          environment: ${{ parameters.environment }}
+      - job: ValidateDeployment
+        displayName: "Validate Deployment"
+        dependsOn: ValidateEnvironment
+        steps:
+          - checkout: self
+
+          - task: AzureCLI@2
+            displayName: "Validate Role Definitions"
+            inputs:
+              azureSubscription: "$(azureServiceConnection)"
+              scriptType: "bash"
+              scriptLocation: "inlineScript"
+              inlineScript: |
+                bash $(scriptsPath)/roles-validate-deployment.sh \
+                  "${{ parameters.managementGroupId }}" \
+                  "$(templateFile)" \
+                  "$(parametersFile)" \
+                  "$(deploymentLocation)" \
+                  "${{ parameters.environment }}" \
+                  "${{ parameters.location }}" \
+                  "${{ parameters.owner }}" \
+                  "${{ parameters.managedBy }}"
+
+  - stage: WhatIf
+    displayName: "What-If Analysis"
+    dependsOn:
+      - Validate
+    # Runs for: WhatIf, Deploy
+    condition: |
+      and(
+        eq(dependencies.Validate.result, 'Succeeded'),
+        in('${{ parameters.deploymentStage }}', 'WhatIf', 'Deploy')
+      )
+    jobs:
+      - job: WhatIfAnalysis
+        displayName: "What-If"
+        steps:
+          - checkout: self
+
+          - task: AzureCLI@2
+            displayName: "What-If Role Definitions"
+            inputs:
+              azureSubscription: "$(azureServiceConnection)"
+              scriptType: "bash"
+              scriptLocation: "inlineScript"
+              inlineScript: |
+                bash $(scriptsPath)/roles-whatif-deployment.sh \
+                  "${{ parameters.managementGroupId }}" \
+                  "$(templateFile)" \
+                  "$(parametersFile)" \
+                  "$(deploymentLocation)" \
+                  "${{ parameters.environment }}" \
+                  "${{ parameters.location }}" \
+                  "${{ parameters.owner }}" \
+                  "${{ parameters.managedBy }}"
+
+  - stage: Deploy
+    displayName: "Deploy Role Definitions"
+    dependsOn:
+      - Validate
+      - WhatIf
+    # Runs for: Deploy only
+    condition: |
+      and(
+        eq(dependencies.Validate.result, 'Succeeded'),
+        in(dependencies.WhatIf.result, 'Succeeded', 'Skipped'),
+        eq('${{ parameters.deploymentStage }}', 'Deploy')
+      )
+    jobs:
+      - deployment: DeployRoleDefs
+        displayName: "Deploy Role Definitions"
+        environment: "${{ parameters.environment }}"
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - checkout: self
+
+                - task: AzureCLI@2
+                  displayName: "Deploy Role Definitions"
+                  inputs:
+                    azureSubscription: "$(azureServiceConnection)"
+                    scriptType: "bash"
+                    scriptLocation: "inlineScript"
+                    inlineScript: |
+                      bash $(scriptsPath)/roles-deploy.sh \
+                        "$(deploymentName)" \
+                        "${{ parameters.managementGroupId }}" \
+                        "$(templateFile)" \
+                        "$(parametersFile)" \
+                        "$(deploymentLocation)" \
+                        "${{ parameters.environment }}" \
+                        "${{ parameters.location }}" \
+                        "${{ parameters.owner }}" \
+                        "${{ parameters.managedBy }}"

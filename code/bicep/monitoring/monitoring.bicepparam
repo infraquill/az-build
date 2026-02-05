@@ -32,32 +32,7 @@ param location = 'canadacentral'
 // Stable defaults for Log Analytics workspace configuration
 // ============================================================================
 
-// Data retention in days (30-730)
-param dataRetention = 60
-
-// SKU: PerGB2018 (Pay-As-You-Go) or CapacityReservation
-// PerGB2018 SKU provides 5 GB/day of free data ingestion (shared across all PerGB2018 workspaces in the same billing account), 
-// unlimited data retention (billed per GB after the free allowance).
-// For official details see: https://docs.microsoft.com/azure/azure-monitor/logs/storage-ingestion#ingestion-costs
-param workspaceSku = 'PerGB2018'
-
-// Capacity reservation level in GB/day (only used when workspaceSku is CapacityReservation)
-// Valid values: 100, 200, 300, 400, 500, 1000, 2000, 5000
-param capacityReservationLevel = 100
-
-// Daily quota for data ingestion in GB (-1 for unlimited)
-param dailyQuotaGb = -1
-
-// ============================================================================
-// SECURITY CONFIGURATION
-// Defaults that support Microsoft-hosted DevOps agent deployments
-// ============================================================================
-
-// Public network access for data plane operations (querying logs, ingesting data)
-// Note: This does NOT affect ARM API deployments - those always work regardless of this setting
-// 'Enabled' allows log queries from any network
-// 'Disabled' restricts data plane to private endpoints only (deployment still works)
-param publicNetworkAccess = 'Enabled'
+param logAnalyticsWorkspaceResourceId = ''
 
 // ============================================================================
 // ACTION GROUP CONFIGURATION
